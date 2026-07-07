@@ -60,6 +60,9 @@
 // Networking
 // ---------------------------------------------------------------------------
 #define AP_PASSWORD       "flight123"   // setup-portal AP password (min 8 chars)
+// Pre-filled in the setup portal's server field; users normally only enter
+// Wi-Fi credentials. Change/clear it in the form for bench testing on a LAN.
+#define DEFAULT_SERVER_URL "https://flight-tracker-uid0.onrender.com"
 #define WIFI_TIMEOUT_MS   20000
 #define WS_PATH           "/ws/device"
 #define WS_RECONNECT_MS   5000

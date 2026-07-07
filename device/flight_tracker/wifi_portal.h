@@ -100,7 +100,7 @@ class WifiPortal {
   }
 
   String formHtml() {
-    return F(
+    String h = F(
       "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
       "<title>Flight Tracker Setup</title><style>"
       "body{font-family:sans-serif;background:#0d1117;color:#e6edf3;padding:20px;max-width:420px;margin:auto}"
@@ -111,9 +111,12 @@ class WifiPortal {
       "<form method='POST' action='/save'>"
       "<label>Home Wi-Fi name (SSID)</label><input name='ssid' required>"
       "<label>Wi-Fi password</label><input name='pass' type='password'>"
-      "<label>Server URL</label><input name='host' placeholder='https://tracker.example.com' required>"
-      "<div style='font-size:.75rem;color:#7d8b99;margin-top:4px'>Hosted server: https://... &nbsp;|&nbsp; local testing: http://192.168.1.50:8080</div>"
+      "<label>Server URL</label><input name='host' value='");
+    h += F(DEFAULT_SERVER_URL);
+    h += F("' required>"
+      "<div style='font-size:.75rem;color:#7d8b99;margin-top:4px'>Leave as-is &mdash; only change for local testing (http://192.168.1.50:8080)</div>"
       "<button type='submit'>Save &amp; restart</button></form></body></html>");
+    return h;
   }
 
   Preferences prefs_;
