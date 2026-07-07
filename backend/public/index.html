@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Flight Tracker Setup</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --line:#1e2833; --txt:#e6edf3; --dim:#78d0ff; --accent:#2ea8ff; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--txt); font-family:system-ui,-apple-system,sans-serif; padding:14px; max-width:560px; margin:0 auto; }
+  h1 { font-size:1.15rem; letter-spacing:.06em; color:var(--dim); margin:6px 0 14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+  label { display:block; font-size:.72rem; letter-spacing:.08em; color:var(--dim); text-transform:uppercase; margin-bottom:6px; }
+  input[type=text] { width:100%; padding:11px; border-radius:8px; border:1px solid var(--line); background:#0a0e13; color:var(--txt); font-size:1rem; text-transform:uppercase; }
+  .row { display:flex; gap:10px; align-items:center; }
+  button { padding:11px 16px; border-radius:8px; border:0; background:var(--accent); color:#fff; font-size:.95rem; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--dim); }
+  button:disabled { opacity:.45; }
+  .modes { display:flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; margin-bottom:12px; }
+  .modes button { flex:1; background:transparent; color:var(--dim); border-radius:0; font-weight:500; }
+  .modes button.active { background:var(--accent); color:#fff; font-weight:700; }
+  #map { height:300px; border-radius:8px; margin-top:10px; }
+  input[type=range] { width:100%; accent-color:var(--accent); }
+  .radius-line { display:flex; justify-content:space-between; font-size:.85rem; color:var(--dim); margin-top:8px; }
+  #status pre { white-space:pre-wrap; font-size:.85rem; color:#9fb3c8; }
+  .flight { font-size:1.05rem; line-height:1.55; }
+  .flight b { color:var(--dim); font-weight:600; }
+  .pill { display:inline-block; padding:2px 10px; border-radius:20px; font-size:.72rem; letter-spacing:.05em; }
+  .pill.on { background:#0f3a1e; color:#4ade80; } .pill.off { background:#3a0f0f; color:#f87171; }
+  .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#123f21; color:#4ade80; padding:10px 18px; border-radius:8px; display:none; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+  <h1>&#9992; FLIGHT TRACKER SETUP</h1>
+
+  <div class="card">
+    <label for="deviceId">Device ID (shown on the device screen)</label>
+    <div class="row">
+      <input type="text" id="deviceId" placeholder="e.g. FT-A1B2C3" autocomplete="off">
+      <button id="connectBtn">Load</button>
+    </div>
+  </div>
+
+  <div id="configArea" class="hidden">
+    <div class="card">
+      <div class="modes">
+        <button id="modeRadius">Radius watch</button>
+        <button id="modeFlight">Track a flight</button>
+      </div>
+
+      <div id="radiusPanel">
+        <label>Watch area &mdash; tap the map or drag the marker</label>
+        <button class="ghost" id="locateBtn">&#128205; Use my location</button>
+        <div id="map"></div>
+        <div class="radius-line"><span>Radius</span><span><b id="radiusVal">50</b> km (max 100)</span></div>
+        <input type="range" id="radius" min="1" max="100" value="50">
+      </div>
+
+      <div id="flightPanel" class="hidden">
+        <label for="callsign">Flight callsign (ICAO, e.g. UAL203, BAW117)</label>
+        <input type="text" id="callsign" placeholder="UAL203" maxlength="8" autocomplete="off">
+      </div>
+
+      <div style="margin-top:14px"><button id="saveBtn" style="width:100%">Save to device</button></div>
+    </div>
+
+    <div class="card" id="status">
+      <label>Device status <span id="onlinePill" class="pill off">offline</span></label>
+      <div id="flightInfo" class="flight">No flight being tracked.</div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">Saved &#10003;</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let deviceId = null, map = null, marker = null, circle = null, statusTimer = null;
+let cfg = { mode: 'radius', lat: null, lon: null, radiusKm: 50, callsign: '' };
+const $ = (id) => document.getElementById(id);
+
+$('connectBtn').onclick = async () => {
+  const id = $('deviceId').value.trim().toUpperCase();
+  if (id.length < 4) return alert('Enter the device ID shown on the tracker screen.');
+  deviceId = id;
+  localStorage.setItem('ft_device', id);
+  const res = await fetch(`/api/devices/${id}/config`);
+  cfg = await res.json();
+  $('configArea').classList.remove('hidden');
+  renderConfig();
+  initMap();
+  if (statusTimer) clearInterval(statusTimer);
+  statusTimer = setInterval(refreshStatus, 4000);
+  refreshStatus();
+};
+
+function renderConfig() {
+  setMode(cfg.mode, false);
+  $('radius').value = cfg.radiusKm;
+  $('radiusVal').textContent = cfg.radiusKm;
+  $('callsign').value = cfg.callsign || '';
+}
+
+function setMode(mode, save) {
+  cfg.mode = mode;
+  $('modeRadius').classList.toggle('active', mode === 'radius');
+  $('modeFlight').classList.toggle('active', mode === 'flight');
+  $('radiusPanel').classList.toggle('hidden', mode !== 'radius');
+  $('flightPanel').classList.toggle('hidden', mode !== 'flight');
+  if (mode === 'radius' && map) setTimeout(() => map.invalidateSize(), 50);
+}
+$('modeRadius').onclick = () => setMode('radius');
+$('modeFlight').onclick = () => setMode('flight');
+
+function initMap() {
+  if (map) { updateOverlay(); return; }
+  const start = [cfg.lat ?? 51.47, cfg.lon ?? -0.4543]; // default: LHR area
+  map = L.map('map').setView(start, 9);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors', maxZoom: 18,
+  }).addTo(map);
+  map.on('click', (e) => { cfg.lat = e.latlng.lat; cfg.lon = e.latlng.lng; updateOverlay(); });
+  if (cfg.lat != null) updateOverlay();
+}
+
+function updateOverlay() {
+  if (cfg.lat == null) return;
+  const pos = [cfg.lat, cfg.lon];
+  if (!marker) {
+    marker = L.marker(pos, { draggable: true }).addTo(map);
+    marker.on('drag', (e) => { cfg.lat = e.latlng.lat; cfg.lon = e.latlng.lng; syncCircle(); });
+  } else marker.setLatLng(pos);
+  syncCircle();
+}
+
+function syncCircle() {
+  const pos = [cfg.lat, cfg.lon];
+  if (!circle) circle = L.circle(pos, { radius: cfg.radiusKm * 1000, color: '#2ea8ff', fillOpacity: 0.08 }).addTo(map);
+  else { circle.setLatLng(pos); circle.setRadius(cfg.radiusKm * 1000); }
+}
+
+$('radius').oninput = (e) => {
+  cfg.radiusKm = +e.target.value;
+  $('radiusVal').textContent = cfg.radiusKm;
+  if (circle) circle.setRadius(cfg.radiusKm * 1000);
+};
+
+$('locateBtn').onclick = () => {
+  navigator.geolocation.getCurrentPosition((p) => {
+    cfg.lat = p.coords.latitude; cfg.lon = p.coords.longitude;
+    map.setView([cfg.lat, cfg.lon], 10);
+    updateOverlay();
+  }, () => alert('Could not get location — tap the map instead.'));
+};
+
+$('saveBtn').onclick = async () => {
+  if (cfg.mode === 'radius' && cfg.lat == null) return alert('Set a location on the map first.');
+  cfg.callsign = $('callsign').value.trim().toUpperCase();
+  if (cfg.mode === 'flight' && !cfg.callsign) return alert('Enter a flight callsign.');
+  const res = await fetch(`/api/devices/${deviceId}/config`, {
+    method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(cfg),
+  });
+  cfg = await res.json();
+  const t = $('toast'); t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 1600);
+};
+
+async function refreshStatus() {
+  if (!deviceId) return;
+  try {
+    const s = await (await fetch(`/api/devices/${deviceId}/status`)).json();
+    const pill = $('onlinePill');
+    pill.textContent = s.online ? 'online' : 'offline';
+    pill.className = 'pill ' + (s.online ? 'on' : 'off');
+    const f = s.flight;
+    $('flightInfo').innerHTML = f
+      ? `<b>FLIGHT</b> ${f.callsign || f.hex}<br><b>AIRLINE</b> ${f.airline || '—'}<br>` +
+        `<b>ROUTE</b> ${f.route || '—'}<br><b>AIRCRAFT</b> ${f.acName || '—'}<br>` +
+        `<b>ALT</b> ${f.altFt.toLocaleString()} ft &nbsp; <b>GS</b> ${f.gsKt} kt &nbsp; <b>HDG</b> ${f.trackDeg}&deg;`
+      : 'No flight being tracked.';
+  } catch (_) {}
+}
+
+// Auto-restore last device
+const saved = localStorage.getItem('ft_device');
+if (saved) { $('deviceId').value = saved; $('connectBtn').click(); }
+</script>
+</body>
+</html>

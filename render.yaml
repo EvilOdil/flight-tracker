@@ -1,0 +1,11 @@
+# Render blueprint — deploy with "New > Blueprint" pointing at this repo.
+# Gives HTTPS + WSS automatically; devices connect to wss://<service>.onrender.com/ws/device
+services:
+  - type: web
+    name: flight-tracker
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    plan: free
+    healthCheckPath: /api/devices

@@ -1,0 +1,8 @@
+node_modules/
+# runtime state (device configs + API caches) — recreated automatically
+backend/data/*.json
+# arduino build output
+device/**/build/
+*.bin
+*.elf
+.DS_Store
