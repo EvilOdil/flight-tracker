@@ -44,12 +44,16 @@ String makeDeviceId() {
 // ---------------------------------------------------------------------------
 
 void handleMessage(uint8_t* payload, size_t len) {
+  Serial.printf("[ws] rx: %.*s\n", (int)len, (const char*)payload);
   JsonDocument doc;
   if (deserializeJson(doc, payload, len)) return;
   const char* t = doc["t"] | "";
 
   if (!strcmp(t, "flight")) {
     tracking = true;
+    Serial.printf("[flight] %s | %s | %s | alt=%ld ft gs=%d kt trk=%d\n",
+                  doc["cs"] | "?", doc["rt"] | "?", doc["ac"] | "?",
+                  (long)(doc["alt"] | 0L), (int)(doc["gs"] | 0), (int)(doc["trk"] | 0));
     String fam = doc["fam"] | "GENERIC";
     showFlightInfo(doc["cs"] | "------", doc["al"] | "", doc["rt"] | "",
                    doc["ac"] | "", bitmapForFamily(fam));
