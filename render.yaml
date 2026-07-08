@@ -10,8 +10,8 @@ services:
     plan: free
     healthCheckPath: /api/devices
     envVars:
-      # TEMPORARY: serve the panel-calibration pattern instead of aircraft
-      # photos (see server.js calibrationJpg). Set back to "0" after the
-      # panel's colour response has been measured.
+      # Calibration mode (server.js calibrationJpg): "1" serves a test
+      # pattern instead of aircraft photos. Measured 2026-07-09: the full
+      # chain renders colours faithfully — keep "0".
       - key: PHOTO_CAL
-        value: "1"
+        value: "0"

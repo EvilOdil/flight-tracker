@@ -19,15 +19,14 @@ const PHOTO_W = 282;
 const PHOTO_H = 217;
 const PHOTO_DIR = path.join(__dirname, 'data', 'photos');
 
-// Panel colour compensation: the device's TN glass renders midtone neutrals
-// with a pink cast (green response sags mid-range; full-scale colours are
-// fine, which is why text looks right). Pre-distort each channel with an
-// inverse gamma so greys land grey ON THE PANEL. Endpoints are pinned, so
-// whites/blacks are untouched. Tune via env without code changes:
-// >1 darkens a channel's midtones, <1 lifts them.
-const PANEL_GAMMA_R = parseFloat(process.env.PANEL_GAMMA_R || '1.08');
-const PANEL_GAMMA_G = parseFloat(process.env.PANEL_GAMMA_G || '0.88');
-const PANEL_GAMMA_B = parseFloat(process.env.PANEL_GAMMA_B || '1.06');
+// Per-channel gamma hooks, default NEUTRAL (1.0 = identity). The calibration
+// pattern (PHOTO_CAL) proved the full chain — encode, decode, drawPixel,
+// panel — renders colours faithfully, so no compensation is applied; earlier
+// non-neutral defaults were themselves tinting greys green. Kept as env
+// knobs for deliberate taste adjustments only.
+const PANEL_GAMMA_R = parseFloat(process.env.PANEL_GAMMA_R || '1.0');
+const PANEL_GAMMA_G = parseFloat(process.env.PANEL_GAMMA_G || '1.0');
+const PANEL_GAMMA_B = parseFloat(process.env.PANEL_GAMMA_B || '1.0');
 function gammaLut(g) {
   const lut = new Uint8Array(256);
   for (let i = 0; i < 256; i++) lut[i] = Math.round(255 * Math.pow(i / 255, g));
