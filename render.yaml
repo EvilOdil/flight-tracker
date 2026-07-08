@@ -9,3 +9,9 @@ services:
     startCommand: npm start
     plan: free
     healthCheckPath: /api/devices
+    envVars:
+      # TEMPORARY: serve the panel-calibration pattern instead of aircraft
+      # photos (see server.js calibrationJpg). Set back to "0" after the
+      # panel's colour response has been measured.
+      - key: PHOTO_CAL
+        value: "1"

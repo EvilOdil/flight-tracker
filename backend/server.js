@@ -69,12 +69,55 @@ app.post('/api/devices/:id/reset-network', (req, res) => {
   res.json({ ok: true });
 });
 
+// Panel calibration pattern (PHOTO_CAL=1): served INSTEAD of every aircraft
+// photo so the device draws it through the exact photo pipeline. Photograph
+// the screen, compare with the known pattern, derive the panel's channel
+// response, bake the inverse into the LUTs. Bypasses the compensation LUTs
+// on purpose — it must measure the raw panel.
+// Bands top->bottom: R ramp, G ramp, B ramp, grey ramp,
+//   patches [sky-blue, blue, red, green, orange, 50% grey],
+//   patches [white, black, 25% grey, 75% grey].
+let calCache = null;
+async function calibrationJpg() {
+  if (calCache) return calCache;
+  const W = PHOTO_W, H = PHOTO_H;
+  const data = Buffer.alloc(W * H * 3);
+  const bandH = Math.floor(H / 6);
+  const hues = [[135, 180, 235], [0, 0, 255], [255, 0, 0], [0, 255, 0], [255, 165, 0], [128, 128, 128]];
+  const greys = [[255, 255, 255], [0, 0, 0], [64, 64, 64], [192, 192, 192]];
+  for (let y = 0; y < H; y++) {
+    const band = Math.min(5, Math.floor(y / bandH));
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 3;
+      const v = Math.round((255 * x) / (W - 1));
+      let c;
+      if (band === 0) c = [v, 0, 0];
+      else if (band === 1) c = [0, v, 0];
+      else if (band === 2) c = [0, 0, v];
+      else if (band === 3) c = [v, v, v];
+      else if (band === 4) c = hues[Math.min(5, Math.floor((6 * x) / W))];
+      else c = greys[Math.min(3, Math.floor((4 * x) / W))];
+      data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2];
+    }
+  }
+  calCache = await sharp(data, { raw: { width: W, height: H, channels: 3 } })
+    .jpeg({ quality: 95, progressive: false, chromaSubsampling: '4:4:4' })
+    .toBuffer();
+  return calCache;
+}
+
 // Aircraft photo for the device's Classic layout: planespotters thumbnail,
 // resized server-side to the panel box, baseline JPEG (TJpg_Decoder can't do
 // progressive), cached on disk by hex. Requested ONLY by devices actually in
 // Classic mode, so Standard-mode devices cost zero photo traffic. 404 -> the
 // device falls back to its built-in silhouette bitmaps.
 app.get('/api/aircraft/:hex/photo', async (req, res) => {
+  if (process.env.PHOTO_CAL === '1') {
+    res.set('content-type', 'image/jpeg');
+    res.set('cache-control', 'no-store');
+    res.set('x-photographer', 'CALIBRATION PATTERN');
+    return res.send(await calibrationJpg());
+  }
   const hex = String(req.params.hex).toLowerCase().replace(/[^0-9a-f]/g, '').slice(0, 6);
   if (hex.length !== 6) return res.status(400).json({ error: 'bad hex' });
   // v3: 4:4:4 chroma (4:2:0 smears hues at this size) + per-channel panel
