@@ -42,10 +42,12 @@ const PANEL_GAMMA_B = parseFloat(process.env.PANEL_GAMMA_B || '1.0');
 // Green correction, measured on-glass with the PHOTO_CAL=3 tuning grid
 // (2026-07-09): the panel's green excess is strongest in the darks and
 // vanishes by the upper mids — grey-64 wanted the gamma-1.3 column, orange
-// (green ~57 after toning) the 1.45 column, grey-192 (green ~79) wanted NO
-// cut (stronger turned it pink). A piecewise-linear curve over the TONED
-// green value hits all three; above the last anchor it follows identity.
-const GREEN_CURVE = (process.env.PANEL_GREEN_CURVE || '0:0,8:3,57:29,80:80')
+// (green ~57 after toning) the 1.45 column, sky blue (green ~69) and
+// grey-192 (~79) wanted NO cut (stronger turned them purple/pink). A
+// piecewise-linear curve over the TONED green value hits all four; the
+// 57->68 segment is deliberately steep — that's what the glass measured.
+// Above the last anchor it follows identity.
+const GREEN_CURVE = (process.env.PANEL_GREEN_CURVE || '0:0,8:3,57:29,68:68,80:80')
   .split(',').map((s) => s.split(':').map(Number));
 function greenCurveVal(t) {
   if (t <= GREEN_CURVE[0][0]) return GREEN_CURVE[0][1];
