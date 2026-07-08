@@ -20,7 +20,10 @@
   .modes { display:flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; margin-bottom:12px; }
   .modes button { flex:1; background:transparent; color:var(--dim); border-radius:0; font-weight:500; }
   .modes button.active { background:var(--accent); color:#fff; font-weight:700; }
-  #map { height:300px; border-radius:8px; margin-top:10px; }
+  /* position:relative + z-index:0 forms a stacking context so Leaflet's big
+     internal z-indexes (panes 400, controls 1000) stay contained inside the
+     map and can never paint above the settings/confirm overlays (z 30). */
+  #map { height:300px; border-radius:8px; margin-top:10px; position:relative; z-index:0; }
   input[type=range] { width:100%; accent-color:var(--accent); }
   .radius-line { display:flex; justify-content:space-between; font-size:.85rem; color:var(--dim); margin-top:8px; }
   #status pre { white-space:pre-wrap; font-size:.85rem; color:#9fb3c8; }
