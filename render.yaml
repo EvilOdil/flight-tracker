@@ -10,8 +10,9 @@ services:
     plan: free
     healthCheckPath: /api/devices
     envVars:
-      # Calibration mode (server.js calibrationJpg): "1" serves a test
-      # pattern instead of aircraft photos. Measured 2026-07-09: the full
-      # chain renders colours faithfully — keep "0".
+      # Calibration mode (server.js calibrationJpg): "1" = raw test pattern,
+      # "2" = pattern through the tone-compensation LUTs, "0" = real photos.
+      # TEMPORARILY "2" to verify the tone compensation on the glass; set to
+      # "0" once the grey order / sky-blue patch check out.
       - key: PHOTO_CAL
-        value: "0"
+        value: "2"

@@ -19,22 +19,33 @@ const PHOTO_W = 282;
 const PHOTO_H = 217;
 const PHOTO_DIR = path.join(__dirname, 'data', 'photos');
 
-// Per-channel gamma hooks, default NEUTRAL (1.0 = identity). The calibration
-// pattern (PHOTO_CAL) proved the full chain — encode, decode, drawPixel,
-// panel — renders colours faithfully, so no compensation is applied; earlier
-// non-neutral defaults were themselves tinting greys green. Kept as env
-// knobs for deliberate taste adjustments only.
+// Panel tone compensation. The clone glass has a NON-MONOTONIC response:
+// steep brightening from black up to input ~PANEL_TONE_MAX, a fold (darker!)
+// through the upper mid-range, recovering only at full scale — measured with
+// the PHOTO_CAL pattern (light grey rendered darker than dark grey; sky blue
+// went purple because its green channel sat in the fold). A folded curve is
+// not invertible, so instead all photo tones are compressed into the
+// monotonic zone: pre-darken with a gamma (the panel's steep low end lifts
+// it back) and ceiling at the fold threshold. The SAME curve on every
+// channel means hues can no longer twist; the cost is slightly compressed
+// highlights. Identity: PANEL_TONE_GAMMA=1 PANEL_TONE_MAX=255.
+const PANEL_TONE_GAMMA = parseFloat(process.env.PANEL_TONE_GAMMA || '2.2');
+const PANEL_TONE_MAX = parseInt(process.env.PANEL_TONE_MAX || '160', 10);
+// Per-channel trim on top of the tone curve, default neutral.
 const PANEL_GAMMA_R = parseFloat(process.env.PANEL_GAMMA_R || '1.0');
 const PANEL_GAMMA_G = parseFloat(process.env.PANEL_GAMMA_G || '1.0');
 const PANEL_GAMMA_B = parseFloat(process.env.PANEL_GAMMA_B || '1.0');
-function gammaLut(g) {
+function channelLut(gamma) {
   const lut = new Uint8Array(256);
-  for (let i = 0; i < 256; i++) lut[i] = Math.round(255 * Math.pow(i / 255, g));
+  for (let i = 0; i < 256; i++) {
+    const toned = Math.min(PANEL_TONE_MAX, Math.round(255 * Math.pow(i / 255, PANEL_TONE_GAMMA)));
+    lut[i] = Math.round(255 * Math.pow(toned / 255, gamma));
+  }
   return lut;
 }
-const LUT_R = gammaLut(PANEL_GAMMA_R);
-const LUT_G = gammaLut(PANEL_GAMMA_G);
-const LUT_B = gammaLut(PANEL_GAMMA_B);
+const LUT_R = channelLut(PANEL_GAMMA_R);
+const LUT_G = channelLut(PANEL_GAMMA_G);
+const LUT_B = channelLut(PANEL_GAMMA_B);
 
 const app = express();
 app.use(express.json());
@@ -76,9 +87,13 @@ app.post('/api/devices/:id/reset-network', (req, res) => {
 // Bands top->bottom: R ramp, G ramp, B ramp, grey ramp,
 //   patches [sky-blue, blue, red, green, orange, 50% grey],
 //   patches [white, black, 25% grey, 75% grey].
-let calCache = null;
-async function calibrationJpg() {
-  if (calCache) return calCache;
+// PHOTO_CAL=1 serves the raw pattern (measures the bare panel);
+// PHOTO_CAL=2 serves it THROUGH the tone-compensation LUTs (verifies the
+// compensation: grey order must come out correct, sky-blue must read blue).
+const calCache = {};
+async function calibrationJpg(applyLuts) {
+  const key = applyLuts ? 'lut' : 'raw';
+  if (calCache[key]) return calCache[key];
   const W = PHOTO_W, H = PHOTO_H;
   const data = Buffer.alloc(W * H * 3);
   const bandH = Math.floor(H / 6);
@@ -96,13 +111,15 @@ async function calibrationJpg() {
       else if (band === 3) c = [v, v, v];
       else if (band === 4) c = hues[Math.min(5, Math.floor((6 * x) / W))];
       else c = greys[Math.min(3, Math.floor((4 * x) / W))];
-      data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2];
+      data[i] = applyLuts ? LUT_R[c[0]] : c[0];
+      data[i + 1] = applyLuts ? LUT_G[c[1]] : c[1];
+      data[i + 2] = applyLuts ? LUT_B[c[2]] : c[2];
     }
   }
-  calCache = await sharp(data, { raw: { width: W, height: H, channels: 3 } })
+  calCache[key] = await sharp(data, { raw: { width: W, height: H, channels: 3 } })
     .jpeg({ quality: 95, progressive: false, chromaSubsampling: '4:4:4' })
     .toBuffer();
-  return calCache;
+  return calCache[key];
 }
 
 // Aircraft photo for the device's Classic layout: planespotters thumbnail,
@@ -111,18 +128,19 @@ async function calibrationJpg() {
 // Classic mode, so Standard-mode devices cost zero photo traffic. 404 -> the
 // device falls back to its built-in silhouette bitmaps.
 app.get('/api/aircraft/:hex/photo', async (req, res) => {
-  if (process.env.PHOTO_CAL === '1') {
+  const cal = process.env.PHOTO_CAL;
+  if (cal === '1' || cal === '2') {
     res.set('content-type', 'image/jpeg');
     res.set('cache-control', 'no-store');
-    res.set('x-photographer', 'CALIBRATION PATTERN');
-    return res.send(await calibrationJpg());
+    res.set('x-photographer', cal === '2' ? 'CAL PATTERN (compensated)' : 'CAL PATTERN (raw)');
+    return res.send(await calibrationJpg(cal === '2'));
   }
   const hex = String(req.params.hex).toLowerCase().replace(/[^0-9a-f]/g, '').slice(0, 6);
   if (hex.length !== 6) return res.status(400).json({ error: 'bad hex' });
-  // v3: 4:4:4 chroma (4:2:0 smears hues at this size) + per-channel panel
-  // gamma compensation (see LUTs above). Cache key includes the gamma values
-  // so retuning via env regenerates stale thumbs automatically.
-  const gTag = `${PANEL_GAMMA_R}-${PANEL_GAMMA_G}-${PANEL_GAMMA_B}`;
+  // v3: 4:4:4 chroma (4:2:0 smears hues at this size) + panel tone
+  // compensation (see LUTs above). Cache key includes all tuning values so a
+  // retune via env regenerates stale thumbs automatically.
+  const gTag = `${PANEL_TONE_GAMMA}-${PANEL_TONE_MAX}-${PANEL_GAMMA_R}-${PANEL_GAMMA_G}-${PANEL_GAMMA_B}`;
   const file = path.join(PHOTO_DIR, `${hex}.v3.${gTag}.jpg`);
   const metaFile = path.join(PHOTO_DIR, `${hex}.json`);
   try {
