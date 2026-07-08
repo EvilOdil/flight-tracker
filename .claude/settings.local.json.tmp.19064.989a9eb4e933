@@ -15,7 +15,8 @@
       "Bash(~/bin/arduino-cli compile *)",
       "Bash(git commit -q -m 'Log received WS frames and flight summaries to serial for bench testing *)",
       "Bash(git push *)",
-      "Bash(git commit -q -m 'Pre-fill setup portal server field with DEFAULT_SERVER_URL *)"
+      "Bash(git commit -q -m 'Pre-fill setup portal server field with DEFAULT_SERVER_URL *)",
+      "Bash(git commit -q -m 'Fix display freeze: remap steppers off TFT bus pins; creative screens; gauge serial log *)"
     ]
   },
   "skillOverrides": {

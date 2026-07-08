@@ -3,7 +3,11 @@
 // Display pin mapping lives in the TFT_eSPI library's User_Setup.h.
 #pragma once
 #include <TFT_eSPI.h>
+#include "config.h"
 #include "bitmaps.h"
+#if UI_CREATIVE_SCREENS
+#include "graphics.h"
+#endif
 
 extern TFT_eSPI tft;
 
@@ -12,16 +16,27 @@ extern TFT_eSPI tft;
 #define COLOR_LINE  tft.color565(30, 40, 50)
 #define COLOR_DIM   tft.color565(110, 125, 140)
 
+// Which screen is currently animating (driven by displayTick from loop()).
+enum UiAnim { UI_ANIM_NONE, UI_ANIM_CONNECTING, UI_ANIM_RADAR };
+static UiAnim uiAnim_ = UI_ANIM_NONE;
+
 inline void displayBegin() {
   tft.begin();
   tft.setRotation(0);
   tft.fillScreen(TFT_BLACK);
 }
 
+inline void showBootScreen() {
+#if UI_CREATIVE_SCREENS
+  gfxBootScreen();
+#endif
+}
+
 // Tested dynamic flight renderer (proportional layout, 200x50 bitmap).
 inline void showFlightInfo(const String& flight, const String& airline,
                            const String& route, const String& aircraft,
                            const unsigned char* planeBitmap) {
+  uiAnim_ = UI_ANIM_NONE;
   tft.fillScreen(TFT_BLACK);
 
   int screenW = tft.width();
@@ -82,6 +97,10 @@ inline void showStatus(const String& title, const String* lines, int nLines) {
 }
 
 inline void showSetupScreen(const String& apName, const String& deviceId) {
+  uiAnim_ = UI_ANIM_NONE;  // portal loop blocks; setup screen is static
+#if UI_CREATIVE_SCREENS
+  gfxSetupScreen(apName);
+#else
   String lines[] = {
     "1. On your phone join",
     "   Wi-Fi: " + apName,
@@ -90,14 +109,26 @@ inline void showSetupScreen(const String& apName, const String& deviceId) {
     "   server address",
   };
   showStatus("SETUP", lines, 5);
+#endif
 }
 
 inline void showConnecting(const String& what) {
+#if UI_CREATIVE_SCREENS
+  gfxConnectingScreen(what);
+  uiAnim_ = UI_ANIM_CONNECTING;
+#else
+  uiAnim_ = UI_ANIM_NONE;
   String lines[] = { what };
   showStatus("CONNECTING", lines, 1);
+#endif
 }
 
 inline void showWaiting(const String& deviceId, const String& modeLine) {
+#if UI_CREATIVE_SCREENS
+  gfxWaitingScreen(deviceId, modeLine);
+  uiAnim_ = UI_ANIM_RADAR;
+#else
+  uiAnim_ = UI_ANIM_NONE;
   String lines[] = {
     "Device ID: " + deviceId,
     modeLine,
@@ -105,4 +136,17 @@ inline void showWaiting(const String& deviceId, const String& modeLine) {
     "tracker web app.",
   };
   showStatus("WATCHING SKY", lines, 4);
+#endif
+}
+
+// Call from loop(): advances whichever animation is on screen. No-op when
+// UI_CREATIVE_SCREENS is 0 or a static screen is showing.
+inline void displayTick() {
+#if UI_CREATIVE_SCREENS
+  static uint32_t lastMs = 0;
+  if (millis() - lastMs < 60) return;
+  lastMs = millis();
+  if (uiAnim_ == UI_ANIM_CONNECTING) gfxConnectingTick();
+  else if (uiAnim_ == UI_ANIM_RADAR) gfxRadarTick();
+#endif
 }

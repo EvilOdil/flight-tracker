@@ -20,6 +20,7 @@ class GaugeStepper {
     wraps_ = wraps;
     for (uint8_t p : pins_) { pinMode(p, OUTPUT); digitalWrite(p, LOW); }
     pos_ = target_ = 0;
+    begun_ = true;
   }
 
   // Target as a fraction of one full revolution [0..1) for wrapping gauges,
@@ -44,6 +45,7 @@ class GaugeStepper {
 
   // Advance at most one step if due. Returns true if it stepped.
   bool run(unsigned long nowUs) {
+    if (!begun_) return false;  // disabled gauge: never touch its pins
     if (pos_ == target_) {
       if (energized_) { release(); }
       return false;
@@ -71,6 +73,7 @@ class GaugeStepper {
   }
 
   uint8_t pins_[4] = {0};
+  bool begun_ = false;
   bool wraps_ = false;
   bool energized_ = false;
   long pos_ = 0, target_ = 0;
@@ -84,7 +87,9 @@ class Gauges {
     heading_.begin(HDG_IN1, HDG_IN2, HDG_IN3, HDG_IN4, true);
     alt100_.begin(ALT1_IN1, ALT1_IN2, ALT1_IN3, ALT1_IN4, true);
     alt1k_.begin(ALT2_IN1, ALT2_IN2, ALT2_IN3, ALT2_IN4, true);
+#if ALT3_ENABLED
     alt10k_.begin(ALT3_IN1, ALT3_IN2, ALT3_IN3, ALT3_IN4, false);
+#endif
   }
 
   void set(long altFt, int gsKt, int trackDeg) {
@@ -98,6 +103,21 @@ class Gauges {
     alt100_.moveToFraction((altFt % 1000) / 1000.0f);
     alt1k_.moveToFraction((altFt % 10000) / 10000.0f);
     alt10k_.moveToFraction(altFt / 100000.0f);
+
+    // Bench-testing aid: what each needle should show, in dial terms and in
+    // motor steps from zero (2048/rev) — compare against the real needles
+    // when the steppers get wired, and calibrate faces/ranges from this.
+    Serial.printf("[gauges] alt=%ld ft gs=%d kt trk=%d deg\n", altFt, gsKt, trackDeg);
+    Serial.printf("[gauges]   speed  %3d kt   -> %4ld steps (%5.1f deg on 270 sweep)\n",
+                  constrain(gsKt, SPEED_MIN_KT, SPEED_MAX_KT),
+                  lroundf(spdFrac * STEPS_PER_REV), spdFrac * 360.0f);
+    Serial.printf("[gauges]   heading %3d deg -> %4ld steps\n",
+                  trackDeg, lroundf(trackDeg / 360.0f * STEPS_PER_REV));
+    Serial.printf("[gauges]   alt 100s=%4ld steps  1000s=%4ld steps  10k=%4ld steps%s\n",
+                  lroundf((altFt % 1000) / 1000.0f * STEPS_PER_REV),
+                  lroundf((altFt % 10000) / 10000.0f * STEPS_PER_REV),
+                  lroundf(altFt / 100000.0f * STEPS_PER_REV),
+                  ALT3_ENABLED ? "" : " (needle 3 disabled)");
   }
 
   void zero() { set(0, 0, 0); }

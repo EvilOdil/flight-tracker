@@ -114,6 +114,7 @@ void setup() {
   deviceId = makeDeviceId();
 
   displayBegin();
+  showBootScreen();  // no-op when UI_CREATIVE_SCREENS is 0
   gauges.begin();
   pinMode(RESET_BTN_PIN, INPUT_PULLUP);
 
@@ -151,6 +152,7 @@ void setup() {
 void loop() {
   ws.loop();
   gauges.run();
+  displayTick();  // animates connecting / radar screens (UI_CREATIVE_SCREENS)
 
   // Hold BOOT for 3 s -> wipe config, back to setup portal.
   if (digitalRead(RESET_BTN_PIN) == LOW) {
