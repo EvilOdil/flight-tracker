@@ -31,14 +31,19 @@ const PHOTO_DIR = path.join(__dirname, 'data', 'photos');
 // highlights. Identity: PANEL_TONE_GAMMA=1 PANEL_TONE_MAX=255.
 const PANEL_TONE_GAMMA = parseFloat(process.env.PANEL_TONE_GAMMA || '2.2');
 const PANEL_TONE_MAX = parseInt(process.env.PANEL_TONE_MAX || '160', 10);
-// Per-channel trim on top of the tone curve, default neutral.
+// Per-channel trim on top of the tone curve. The panel's steep low zone
+// lifts green slightly more than red/blue (greys read greenish), so green
+// gets a gentle darken by default.
 const PANEL_GAMMA_R = parseFloat(process.env.PANEL_GAMMA_R || '1.0');
-const PANEL_GAMMA_G = parseFloat(process.env.PANEL_GAMMA_G || '1.0');
+const PANEL_GAMMA_G = parseFloat(process.env.PANEL_GAMMA_G || '1.06');
 const PANEL_GAMMA_B = parseFloat(process.env.PANEL_GAMMA_B || '1.0');
 function channelLut(gamma) {
   const lut = new Uint8Array(256);
   for (let i = 0; i < 256; i++) {
-    const toned = Math.min(PANEL_TONE_MAX, Math.round(255 * Math.pow(i / 255, PANEL_TONE_GAMMA)));
+    // SCALE into [0, TONE_MAX] (not clip!): a hard ceiling crushed every
+    // bright value to the same level, desaturating bright hues (sky blue
+    // came out whitish). Scaling keeps channel ratios across the range.
+    const toned = Math.round(PANEL_TONE_MAX * Math.pow(i / 255, PANEL_TONE_GAMMA));
     lut[i] = Math.round(255 * Math.pow(toned / 255, gamma));
   }
   return lut;
