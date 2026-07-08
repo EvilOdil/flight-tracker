@@ -20,6 +20,12 @@ extern TFT_eSPI tft;
 enum UiAnim { UI_ANIM_NONE, UI_ANIM_CONNECTING, UI_ANIM_RADAR };
 static UiAnim uiAnim_ = UI_ANIM_NONE;
 
+// Identity of the flight currently painted, so a repeated identical "flight"
+// frame is a no-op instead of a full-screen repaint (blank-flash + ~tens of ms
+// blocking on the parallel bus). Cleared by every other screen so returning to
+// the same flight still repaints once.
+static String lastFlightKey_;
+
 inline void displayBegin() {
   tft.begin();
   tft.setRotation(0);
@@ -36,6 +42,12 @@ inline void showBootScreen() {
 inline void showFlightInfo(const String& flight, const String& airline,
                            const String& route, const String& aircraft,
                            const unsigned char* planeBitmap) {
+  // Skip the repaint when nothing visible changed (backend may resend the
+  // same "flight" frame). Gauges are updated separately by the caller.
+  String key = flight + '\x1f' + airline + '\x1f' + route + '\x1f' + aircraft;
+  if (uiAnim_ == UI_ANIM_NONE && key == lastFlightKey_) return;
+  lastFlightKey_ = key;
+
   uiAnim_ = UI_ANIM_NONE;
   tft.fillScreen(TFT_BLACK);
 
@@ -79,6 +91,7 @@ inline void showFlightInfo(const String& flight, const String& airline,
 
 // Generic status screen: big title + up to 5 detail lines.
 inline void showStatus(const String& title, const String* lines, int nLines) {
+  lastFlightKey_ = String();  // leaving the flight screen
   tft.fillScreen(TFT_BLACK);
   int marginLeft = tft.width() * 0.06;
   tft.setCursor(marginLeft, tft.height() * 0.08);
@@ -97,6 +110,7 @@ inline void showStatus(const String& title, const String* lines, int nLines) {
 }
 
 inline void showSetupScreen(const String& apName, const String& deviceId) {
+  lastFlightKey_ = String();
   uiAnim_ = UI_ANIM_NONE;  // portal loop blocks; setup screen is static
 #if UI_CREATIVE_SCREENS
   gfxSetupScreen(apName);
@@ -113,6 +127,7 @@ inline void showSetupScreen(const String& apName, const String& deviceId) {
 }
 
 inline void showConnecting(const String& what) {
+  lastFlightKey_ = String();
 #if UI_CREATIVE_SCREENS
   gfxConnectingScreen(what);
   uiAnim_ = UI_ANIM_CONNECTING;
@@ -124,6 +139,7 @@ inline void showConnecting(const String& what) {
 }
 
 inline void showWaiting(const String& deviceId, const String& modeLine) {
+  lastFlightKey_ = String();
 #if UI_CREATIVE_SCREENS
   gfxWaitingScreen(deviceId, modeLine);
   uiAnim_ = UI_ANIM_RADAR;

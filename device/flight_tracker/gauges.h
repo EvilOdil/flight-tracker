@@ -107,6 +107,7 @@ class Gauges {
     // Bench-testing aid: what each needle should show, in dial terms and in
     // motor steps from zero (2048/rev) — compare against the real needles
     // when the steppers get wired, and calibrate faces/ranges from this.
+#if GAUGE_SERIAL_LOG
     Serial.printf("[gauges] alt=%ld ft gs=%d kt trk=%d deg\n", altFt, gsKt, trackDeg);
     Serial.printf("[gauges]   speed  %3d kt   -> %4ld steps (%5.1f deg on 270 sweep)\n",
                   constrain(gsKt, SPEED_MIN_KT, SPEED_MAX_KT),
@@ -118,6 +119,7 @@ class Gauges {
                   lroundf((altFt % 10000) / 10000.0f * STEPS_PER_REV),
                   lroundf(altFt / 100000.0f * STEPS_PER_REV),
                   ALT3_ENABLED ? "" : " (needle 3 disabled)");
+#endif
   }
 
   void zero() { set(0, 0, 0); }

@@ -111,6 +111,13 @@ void wsEvent(WStype_t type, uint8_t* payload, size_t len) {
 
 void setup() {
   Serial.begin(115200);
+  // ESP32-S3 native USB-CDC: with no serial monitor attached the TX buffer
+  // fills and Serial.print() blocks until a timeout, stalling loop() (looks
+  // like a display "freeze" once the monitor is closed). Never block on TX.
+  // (Only USB-CDC Serial has this; a UART build has no such hazard.)
+#if ARDUINO_USB_CDC_ON_BOOT
+  Serial.setTxTimeoutMs(0);
+#endif
   deviceId = makeDeviceId();
 
   displayBegin();

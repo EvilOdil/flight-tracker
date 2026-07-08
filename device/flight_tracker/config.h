@@ -71,6 +71,10 @@
 // no other change needed anywhere.
 #define UI_CREATIVE_SCREENS 1
 
+// Per-frame gauge target logging to serial (bench-testing aid before the
+// steppers are wired). Set to 0 for production — it runs on the WS hot path.
+#define GAUGE_SERIAL_LOG 1
+
 // ---------------------------------------------------------------------------
 // Networking
 // ---------------------------------------------------------------------------
