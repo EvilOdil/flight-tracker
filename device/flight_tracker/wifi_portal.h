@@ -51,12 +51,19 @@ class WifiPortal {
     WiFi.softAP(apName.c_str(), AP_PASSWORD);
     dns_.start(53, "*", WiFi.softAPIP());
 
-    server_.on("/", [this]() { server_.send(200, "text/html", formHtml()); });
     server_.on("/save", HTTP_POST, [this]() { handleSave(); });
-    server_.onNotFound([this]() {  // captive-portal redirect
-      server_.sendHeader("Location", "http://192.168.4.1/", true);
-      server_.send(302, "text/plain", "");
-    });
+    // Captive-portal auto-open: on joining, phones probe a known URL (Android
+    // /generate_204, iOS captive.apple.com, Windows msftconnecttest). Wildcard
+    // DNS routes them all here; answering anything other than their expected
+    // "success" makes the OS pop up its sign-in browser. Serve the setup form
+    // for the root AND every unrecognized probe, so that sheet lands straight
+    // on the config page instead of a redirect the CNA browser may not follow.
+    auto serveForm = [this]() {
+      server_.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      server_.send(200, "text/html", formHtml());
+    };
+    server_.on("/", serveForm);
+    server_.onNotFound(serveForm);
     server_.begin();
 
     while (true) {

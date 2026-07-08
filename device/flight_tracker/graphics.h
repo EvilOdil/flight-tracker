@@ -7,8 +7,12 @@
 #pragma once
 #include <TFT_eSPI.h>
 #include "config.h"
+#include "qr.h"
 
 extern TFT_eSPI tft;
+
+// The SoftAP captive-portal address (WiFi.softAPIP() default).
+#define SETUP_PORTAL_IP  "192.168.4.1"
 
 #define GFX_ACCENT   tft.color565(120, 200, 255)   // matches COLOR_LABEL
 #define GFX_DIMTXT   tft.color565(110, 125, 140)
@@ -58,42 +62,58 @@ inline void gfxBootScreen() {
   }
 }
 
+// Standard "WIFI:" QR payload that phone cameras parse to auto-join a network
+// ("Join Network" prompt on iOS/Android). Escapes the MECARD special chars.
+inline String wifiJoinPayload(const String& ssid, const String& pass) {
+  auto esc = [](const String& s) {
+    String o;
+    for (uint16_t i = 0; i < s.length(); i++) {
+      char c = s[i];
+      if (c == '\\' || c == ';' || c == ',' || c == ':' || c == '"') o += '\\';
+      o += c;
+    }
+    return o;
+  };
+  return "WIFI:T:WPA;S:" + esc(ssid) + ";P:" + esc(pass) + ";;";
+}
+
 // ---------------------------------------------------------------------------
-// Setup scene: phone with a Wi-Fi symbol on its screen + join instructions.
-// Static (the portal loop blocks, so no animation here).
+// Setup scene (all centered): scan the QR to JOIN the device Wi-Fi, then the
+// captive portal auto-opens the setup page. Wi-Fi name/password and the portal
+// IP are printed below as fallbacks for anyone who can't scan or whose page
+// doesn't pop up on its own. Static (the portal loop blocks — no animation).
 // ---------------------------------------------------------------------------
 inline void gfxSetupScreen(const String& apName) {
   tft.fillScreen(TFT_BLACK);
   int w = tft.width(), h = tft.height();
-  int px = w / 2, py = h * 0.24;  // phone centre
+  int cx = w / 2;
+  tft.setTextDatum(TC_DATUM);  // draw everything about the horizontal centre
 
-  tft.drawRoundRect(px - 38, py - 62, 76, 124, 10, GFX_ACCENT);
-  tft.drawRoundRect(px - 37, py - 61, 74, 122, 10, GFX_ACCENT);  // 2px border
-  tft.fillRect(px - 12, py + 48, 24, 4, GFX_TRAIL);              // home bar
-  // Wi-Fi symbol: concentric circles, bottom halves masked to leave arcs.
-  int wy = py + 10;
-  for (int r = 12; r <= 36; r += 12) tft.drawCircle(px, wy, r, GFX_ACCENT);
-  tft.fillRect(px - 40, wy + 1, 80, 40, TFT_BLACK);
-  tft.fillRect(px - 40, wy - 42, 80, 30, TFT_BLACK);  // trim arc tops to ~60 deg fan
-  tft.fillCircle(px, wy, 4, GFX_ACCENT);
-
-  tft.setTextDatum(TC_DATUM);
   tft.setTextColor(GFX_ACCENT, TFT_BLACK);
   tft.setTextSize(3);
-  tft.drawString("SETUP", w / 2, h * 0.42);
-  tft.setTextDatum(TL_DATUM);
+  tft.drawString("SETUP", cx, h * 0.035);
 
-  int mx = w * 0.06, y = h * 0.50, dy = h * 0.055;
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
-  tft.setTextColor(TFT_WHITE);
-  tft.setCursor(mx, y);              tft.println("1. On your phone join");
-  tft.setCursor(mx, y += dy);        tft.print("   Wi-Fi: ");
-  tft.setTextColor(GFX_ACCENT);      tft.println(apName);
-  tft.setTextColor(GFX_DIMTXT);
-  tft.setCursor(mx, y += dy);        tft.println("   password: " AP_PASSWORD);
-  tft.setTextColor(TFT_WHITE);
-  tft.setCursor(mx, y += dy);        tft.println("2. Open 192.168.4.1");
-  tft.setCursor(mx, y += dy);        tft.println("3. Enter home Wi-Fi");
+  tft.drawString("Scan to join Wi-Fi", cx, h * 0.105);
+
+  // QR encodes the Wi-Fi credentials -> phone joins the hotspot on scan.
+  drawQR(wifiJoinPayload(apName, AP_PASSWORD), cx, h * 0.40, 5);
+
+  // Fallbacks below the code, centered.
+  int y = h * 0.635, dy = h * 0.05;
+  tft.setTextColor(GFX_ACCENT, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.drawString("Wi-Fi: " + apName, cx, y);
+  tft.setTextColor(GFX_DIMTXT, TFT_BLACK);
+  tft.drawString("Password: " AP_PASSWORD, cx, y += dy);
+
+  tft.setTextSize(1);
+  tft.drawString("Setup page opens automatically -", cx, y += dy * 1.05);
+  tft.setTextColor(GFX_ACCENT, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.drawString("else open " SETUP_PORTAL_IP, cx, y += dy * 0.7);
+  tft.setTextDatum(TL_DATUM);
 }
 
 // ---------------------------------------------------------------------------
