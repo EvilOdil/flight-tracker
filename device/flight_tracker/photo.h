@@ -56,10 +56,11 @@ inline bool drawAircraftPhoto(const String& url, int x, int y, int w, int h,
 
   uint16_t jw = 0, jh = 0;
   TJpgDec.setJpgScale(1);            // backend already sized it to the box
-  // 8-bit PARALLEL bus: pushImage writes 16-bit colours directly, so the
-  // decoder output must stay in native byte order. setSwapBytes(true) is for
-  // SPI panels and mangles the hues here (red/blue channels distorted).
-  TJpgDec.setSwapBytes(false);
+  // Byte order, verified against the TFT_eSPI parallel source: with the tft
+  // default _swapBytes=false, pushPixels() writes buffers via tft_Write_16S,
+  // i.e. it EXPECTS pre-swapped pixels — which is exactly what the decoder
+  // emits with setSwapBytes(true). Net result matches the text/fill path.
+  TJpgDec.setSwapBytes(true);
   TJpgDec.setCallback(photoPushBlock);
   if (TJpgDec.getJpgSize(&jw, &jh, buf, len) != JDR_OK
       || jw == 0 || jw > w || jh > h) { free(buf); return false; }

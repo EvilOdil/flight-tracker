@@ -59,7 +59,9 @@ app.post('/api/devices/:id/reset-network', (req, res) => {
 app.get('/api/aircraft/:hex/photo', async (req, res) => {
   const hex = String(req.params.hex).toLowerCase().replace(/[^0-9a-f]/g, '').slice(0, 6);
   if (hex.length !== 6) return res.status(400).json({ error: 'bad hex' });
-  const file = path.join(PHOTO_DIR, `${hex}.jpg`);
+  // v2: 4:4:4 chroma — the default 4:2:0 subsampling halves colour resolution,
+  // which visibly smears hues on the small TFT (looked like a conversion bug).
+  const file = path.join(PHOTO_DIR, `${hex}.v2.jpg`);
   const metaFile = path.join(PHOTO_DIR, `${hex}.json`);
   try {
     if (!fs.existsSync(file)) {
@@ -69,7 +71,7 @@ app.get('/api/aircraft/:hex/photo', async (req, res) => {
       if (!r.ok) return res.status(404).json({ error: 'photo fetch failed' });
       const jpg = await sharp(Buffer.from(await r.arrayBuffer()))
         .resize(PHOTO_W, PHOTO_H, { fit: 'inside' })
-        .jpeg({ quality: 78, progressive: false })
+        .jpeg({ quality: 88, progressive: false, chromaSubsampling: '4:4:4' })
         .toBuffer();
       fs.mkdirSync(PHOTO_DIR, { recursive: true });
       fs.writeFileSync(file, jpg);
