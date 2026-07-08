@@ -55,8 +55,15 @@ void handleMessage(uint8_t* payload, size_t len) {
                   doc["cs"] | "?", doc["rt"] | "?", doc["ac"] | "?",
                   (long)(doc["alt"] | 0L), (int)(doc["gs"] | 0), (int)(doc["trk"] | 0));
     String fam = doc["fam"] | "GENERIC";
+    // Absolute photo URL for the Classic layout; the fetch itself only
+    // happens inside drawFlightClassic (Standard mode never requests it).
+    String imgUrl;
+    const char* img = doc["img"] | "";
+    if (img[0]) {
+      imgUrl = String(net.tls ? "https://" : "http://") + net.host + ":" + net.port + img;
+    }
     showFlightInfo(doc["cs"] | "------", doc["al"] | "", doc["rt"] | "",
-                   doc["ac"] | "", bitmapForFamily(fam));
+                   doc["ac"] | "", bitmapForFamily(fam), imgUrl);
     gauges.set(doc["alt"] | 0L, doc["gs"] | 0, doc["trk"] | 0);
 
   } else if (!strcmp(t, "state")) {

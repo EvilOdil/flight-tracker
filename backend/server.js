@@ -2,12 +2,22 @@
 // Run: npm install && npm start   (Node >= 18)
 
 const http = require('http');
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
+const sharp = require('sharp');
 const { WebSocketServer } = require('ws');
 const tracker = require('./lib/tracker');
+const upstream = require('./lib/upstream');
 
 const PORT = process.env.PORT || 8080;
+
+// Device photo panel box (Classic layout on the 320x480 TFT); photos are
+// resized to fit inside it once and cached on disk, so each airframe costs
+// one planespotters lookup + one download ever.
+const PHOTO_W = 282;
+const PHOTO_H = 217;
+const PHOTO_DIR = path.join(__dirname, 'data', 'photos');
 
 const app = express();
 app.use(express.json());
@@ -39,6 +49,42 @@ app.post('/api/devices/:id/reset-network', (req, res) => {
   const ok = tracker.resetNetwork(req.params.id.toUpperCase());
   if (!ok) return res.status(409).json({ error: 'device offline' });
   res.json({ ok: true });
+});
+
+// Aircraft photo for the device's Classic layout: planespotters thumbnail,
+// resized server-side to the panel box, baseline JPEG (TJpg_Decoder can't do
+// progressive), cached on disk by hex. Requested ONLY by devices actually in
+// Classic mode, so Standard-mode devices cost zero photo traffic. 404 -> the
+// device falls back to its built-in silhouette bitmaps.
+app.get('/api/aircraft/:hex/photo', async (req, res) => {
+  const hex = String(req.params.hex).toLowerCase().replace(/[^0-9a-f]/g, '').slice(0, 6);
+  if (hex.length !== 6) return res.status(400).json({ error: 'bad hex' });
+  const file = path.join(PHOTO_DIR, `${hex}.jpg`);
+  const metaFile = path.join(PHOTO_DIR, `${hex}.json`);
+  try {
+    if (!fs.existsSync(file)) {
+      const p = await upstream.lookupPhoto(hex);
+      if (!p) return res.status(404).json({ error: 'no photo' });
+      const r = await fetch(p.src, { headers: { 'user-agent': upstream.USER_AGENT } });
+      if (!r.ok) return res.status(404).json({ error: 'photo fetch failed' });
+      const jpg = await sharp(Buffer.from(await r.arrayBuffer()))
+        .resize(PHOTO_W, PHOTO_H, { fit: 'inside' })
+        .jpeg({ quality: 78, progressive: false })
+        .toBuffer();
+      fs.mkdirSync(PHOTO_DIR, { recursive: true });
+      fs.writeFileSync(file, jpg);
+      fs.writeFileSync(metaFile, JSON.stringify({ photographer: p.photographer }));
+    }
+    let credit = '';
+    try { credit = JSON.parse(fs.readFileSync(metaFile, 'utf8')).photographer || ''; } catch (_) {}
+    res.set('content-type', 'image/jpeg');
+    res.set('cache-control', 'public, max-age=604800');
+    if (credit) res.set('x-photographer', credit);
+    res.send(fs.readFileSync(file));
+  } catch (err) {
+    console.error('[photo]', hex, err.message);
+    res.status(404).json({ error: 'photo error' });
+  }
 });
 
 // --- Device WebSocket --------------------------------------------------------

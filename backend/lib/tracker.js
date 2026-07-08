@@ -162,6 +162,9 @@ function sendFlight(d) {
     rt: m.route || '--- -> ---',
     ac: m.acName || (a.typeCode || 'UNKNOWN'),
     fam: m.fam,
+    // Photo path for the Classic layout; the device only fetches it when that
+    // layout is active, and the backend only hits planespotters when fetched.
+    img: a.hex ? `/api/aircraft/${a.hex}/photo` : '',
     alt: quant(a.altFt, TH_ALT_FT),
     gs: a.gsKt,
     trk: a.trackDeg,

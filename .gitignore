@@ -1,6 +1,6 @@
 node_modules/
-# runtime state (device configs + API caches) — recreated automatically
-backend/data/*.json
+# runtime state (device configs + API caches + photo cache) — recreated automatically
+backend/data/
 # arduino build output
 device/**/build/
 *.bin
