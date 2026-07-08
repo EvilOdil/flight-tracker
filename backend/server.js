@@ -30,12 +30,14 @@ const PHOTO_DIR = path.join(__dirname, 'data', 'photos');
 // channel means hues can no longer twist; the cost is slightly compressed
 // highlights. Identity: PANEL_TONE_GAMMA=1 PANEL_TONE_MAX=255.
 const PANEL_TONE_GAMMA = parseFloat(process.env.PANEL_TONE_GAMMA || '2.2');
-const PANEL_TONE_MAX = parseInt(process.env.PANEL_TONE_MAX || '160', 10);
-// Per-channel trim on top of the tone curve. The panel's steep low zone
-// lifts green slightly more than red/blue (greys read greenish), so green
-// gets a gentle darken by default.
+// 148: with 160 the top of the compressed range still brushed the start of
+// the fold (orange's red ceiling sagged -> read yellow-green on glass).
+const PANEL_TONE_MAX = parseInt(process.env.PANEL_TONE_MAX || '148', 10);
+// Per-channel trim on top of the tone curve. The panel over-lifts green in
+// its LOW zone (greenish near-black greys, greenish orange), and a gamma
+// suppresses lows relatively harder than mids — hence green 1.12.
 const PANEL_GAMMA_R = parseFloat(process.env.PANEL_GAMMA_R || '1.0');
-const PANEL_GAMMA_G = parseFloat(process.env.PANEL_GAMMA_G || '1.06');
+const PANEL_GAMMA_G = parseFloat(process.env.PANEL_GAMMA_G || '1.12');
 const PANEL_GAMMA_B = parseFloat(process.env.PANEL_GAMMA_B || '1.0');
 function channelLut(gamma) {
   const lut = new Uint8Array(256);
