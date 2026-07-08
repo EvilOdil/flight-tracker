@@ -12,6 +12,6 @@ services:
     envVars:
       # Calibration mode (server.js): "1" = raw test pattern, "2" = pattern
       # through the tone LUTs, "3" = green-gamma tuning grid, "0" = photos.
-      # TEMPORARILY "3": user picks the neutral column, then back to "0".
+      # Calibrated 2026-07-09 (tone scale + piecewise green curve) — keep "0".
       - key: PHOTO_CAL
-        value: "3"
+        value: "0"

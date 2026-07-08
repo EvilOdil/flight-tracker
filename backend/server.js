@@ -33,25 +33,47 @@ const PANEL_TONE_GAMMA = parseFloat(process.env.PANEL_TONE_GAMMA || '2.2');
 // 148: with 160 the top of the compressed range still brushed the start of
 // the fold (orange's red ceiling sagged -> read yellow-green on glass).
 const PANEL_TONE_MAX = parseInt(process.env.PANEL_TONE_MAX || '148', 10);
-// Per-channel trim on top of the tone curve. The panel over-lifts green in
-// its LOW zone (greenish near-black greys, greenish orange), and a gamma
-// suppresses lows relatively harder than mids — hence green 1.12.
+// Per-channel trim on top of the tone curve, default neutral (green is
+// handled by the piecewise curve below instead — no single gamma fits).
 const PANEL_GAMMA_R = parseFloat(process.env.PANEL_GAMMA_R || '1.0');
-const PANEL_GAMMA_G = parseFloat(process.env.PANEL_GAMMA_G || '1.12');
+const PANEL_GAMMA_G = parseFloat(process.env.PANEL_GAMMA_G || '1.0');
 const PANEL_GAMMA_B = parseFloat(process.env.PANEL_GAMMA_B || '1.0');
-function channelLut(gamma) {
+
+// Green correction, measured on-glass with the PHOTO_CAL=3 tuning grid
+// (2026-07-09): the panel's green excess is strongest in the darks and
+// vanishes by the upper mids — grey-64 wanted the gamma-1.3 column, orange
+// (green ~57 after toning) the 1.45 column, grey-192 (green ~79) wanted NO
+// cut (stronger turned it pink). A piecewise-linear curve over the TONED
+// green value hits all three; above the last anchor it follows identity.
+const GREEN_CURVE = (process.env.PANEL_GREEN_CURVE || '0:0,8:3,57:29,80:80')
+  .split(',').map((s) => s.split(':').map(Number));
+function greenCurveVal(t) {
+  if (t <= GREEN_CURVE[0][0]) return GREEN_CURVE[0][1];
+  for (let k = 1; k < GREEN_CURVE.length; k++) {
+    if (t <= GREEN_CURVE[k][0]) {
+      const [x0, y0] = GREEN_CURVE[k - 1];
+      const [x1, y1] = GREEN_CURVE[k];
+      return y0 + ((y1 - y0) * (t - x0)) / (x1 - x0);
+    }
+  }
+  const [xl, yl] = GREEN_CURVE[GREEN_CURVE.length - 1];
+  return yl + (t - xl);
+}
+
+function channelLut(gamma, isGreen = false) {
   const lut = new Uint8Array(256);
   for (let i = 0; i < 256; i++) {
     // SCALE into [0, TONE_MAX] (not clip!): a hard ceiling crushed every
     // bright value to the same level, desaturating bright hues (sky blue
     // came out whitish). Scaling keeps channel ratios across the range.
-    const toned = Math.round(PANEL_TONE_MAX * Math.pow(i / 255, PANEL_TONE_GAMMA));
-    lut[i] = Math.round(255 * Math.pow(toned / 255, gamma));
+    let toned = PANEL_TONE_MAX * Math.pow(i / 255, PANEL_TONE_GAMMA);
+    if (isGreen) toned = greenCurveVal(toned);
+    lut[i] = Math.round(255 * Math.pow(Math.round(toned) / 255, gamma));
   }
   return lut;
 }
 const LUT_R = channelLut(PANEL_GAMMA_R);
-const LUT_G = channelLut(PANEL_GAMMA_G);
+const LUT_G = channelLut(PANEL_GAMMA_G, true);
 const LUT_B = channelLut(PANEL_GAMMA_B);
 
 const app = express();
@@ -189,7 +211,8 @@ app.get('/api/aircraft/:hex/photo', async (req, res) => {
   // v3: 4:4:4 chroma (4:2:0 smears hues at this size) + panel tone
   // compensation (see LUTs above). Cache key includes all tuning values so a
   // retune via env regenerates stale thumbs automatically.
-  const gTag = `${PANEL_TONE_GAMMA}-${PANEL_TONE_MAX}-${PANEL_GAMMA_R}-${PANEL_GAMMA_G}-${PANEL_GAMMA_B}`;
+  const curveTag = GREEN_CURVE.map((p) => p.join('_')).join('-');
+  const gTag = `${PANEL_TONE_GAMMA}-${PANEL_TONE_MAX}-${PANEL_GAMMA_R}-${PANEL_GAMMA_G}-${PANEL_GAMMA_B}-g${curveTag}`;
   const file = path.join(PHOTO_DIR, `${hex}.v3.${gTag}.jpg`);
   const metaFile = path.join(PHOTO_DIR, `${hex}.json`);
   try {
