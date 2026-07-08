@@ -56,7 +56,10 @@ inline bool drawAircraftPhoto(const String& url, int x, int y, int w, int h,
 
   uint16_t jw = 0, jh = 0;
   TJpgDec.setJpgScale(1);            // backend already sized it to the box
-  TJpgDec.setSwapBytes(true);
+  // 8-bit PARALLEL bus: pushImage writes 16-bit colours directly, so the
+  // decoder output must stay in native byte order. setSwapBytes(true) is for
+  // SPI panels and mangles the hues here (red/blue channels distorted).
+  TJpgDec.setSwapBytes(false);
   TJpgDec.setCallback(photoPushBlock);
   if (TJpgDec.getJpgSize(&jw, &jh, buf, len) != JDR_OK
       || jw == 0 || jw > w || jh > h) { free(buf); return false; }
