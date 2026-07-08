@@ -177,6 +177,8 @@ async function loadDevice(id, quiet) {
   }
   deviceId = id;
   localStorage.setItem('ft_device', id);
+  // Adopt the device's saved theme so app + device screen match.
+  if (cfg.theme) applyTheme(cfg.theme, false);
   $('configArea').classList.remove('hidden');
   renderConfig();
   initMap();
@@ -290,7 +292,11 @@ function lighten(hex, amt) {
   return '#' + [r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
 
-function applyTheme(hex) {
+// push=false applies locally only (initial load / adopting a device's saved
+// theme); otherwise the colour is also sent to the device config, debounced
+// because the custom colour input fires continuously while dragging.
+let themePushTimer = null;
+function applyTheme(hex, push = true) {
   themeColor = hex;
   document.documentElement.style.setProperty('--accent', hex);
   document.documentElement.style.setProperty('--dim', lighten(hex, 0.4));
@@ -299,6 +305,19 @@ function applyTheme(hex) {
   document.querySelectorAll('.swatch').forEach((s) =>
     s.classList.toggle('sel', s.dataset.c.toLowerCase() === hex.toLowerCase()));
   if (circle) circle.setStyle({ color: hex });
+
+  if (push && deviceId) {
+    clearTimeout(themePushTimer);
+    themePushTimer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/devices/${deviceId}/config`, {
+          method: 'PUT', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ theme: hex }),
+        });
+        cfg = await res.json();
+      } catch (_) { /* device keeps its old colour; next save syncs it */ }
+    }, 350);
+  }
 }
 
 (function buildSwatches() {
@@ -311,7 +330,7 @@ function applyTheme(hex) {
   });
 })();
 $('themeCustom').oninput = (e) => applyTheme(e.target.value);
-applyTheme(localStorage.getItem('ft_theme') || THEMES[0]);
+applyTheme(localStorage.getItem('ft_theme') || THEMES[0], false);
 
 function syncSettings() {
   const has = !!deviceId;

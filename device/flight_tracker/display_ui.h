@@ -4,6 +4,7 @@
 #pragma once
 #include <TFT_eSPI.h>
 #include "config.h"
+#include "theme.h"
 #include "bitmaps.h"
 #if UI_CREATIVE_SCREENS
 #include "graphics.h"
@@ -11,7 +12,7 @@
 
 extern TFT_eSPI tft;
 
-#define COLOR_LABEL tft.color565(120, 200, 255)
+#define COLOR_LABEL uiAccent565
 #define COLOR_VALUE TFT_WHITE
 #define COLOR_LINE  tft.color565(30, 40, 50)
 #define COLOR_DIM   tft.color565(110, 125, 140)
@@ -134,9 +135,10 @@ inline void showFlightInfo(const String& flight, const String& airline,
                            const String& route, const String& aircraft,
                            const unsigned char* planeBitmap) {
   // Skip the repaint when nothing visible changed (backend may resend the same
-  // "flight" frame). Layout is part of the key so a layout switch redraws.
-  // Gauges are updated separately by the caller.
-  String key = String((int)flightLayout_) + '\x1f' + flight + '\x1f' + airline
+  // "flight" frame). Layout and theme are part of the key so switching either
+  // redraws. Gauges are updated separately by the caller.
+  String key = String((int)flightLayout_) + '\x1f' + String((unsigned)uiAccent565)
+             + '\x1f' + flight + '\x1f' + airline
              + '\x1f' + route + '\x1f' + aircraft;
   if (uiAnim_ == UI_ANIM_NONE && key == lastFlightKey_) return;
   lastFlightKey_ = key;

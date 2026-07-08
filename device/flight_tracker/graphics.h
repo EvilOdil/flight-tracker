@@ -7,6 +7,7 @@
 #pragma once
 #include <TFT_eSPI.h>
 #include "config.h"
+#include "theme.h"
 #include "qr.h"
 
 extern TFT_eSPI tft;
@@ -14,7 +15,7 @@ extern TFT_eSPI tft;
 // The SoftAP captive-portal address (WiFi.softAPIP() default).
 #define SETUP_PORTAL_IP  "192.168.4.1"
 
-#define GFX_ACCENT   tft.color565(120, 200, 255)   // matches COLOR_LABEL
+#define GFX_ACCENT   uiAccent565                    // matches COLOR_LABEL
 #define GFX_DIMTXT   tft.color565(110, 125, 140)
 #define GFX_FAINT    tft.color565(22, 34, 46)
 #define GFX_TRAIL    tft.color565(50, 70, 90)

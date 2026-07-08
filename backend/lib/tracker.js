@@ -42,7 +42,8 @@ const devices = new Map();
 
 function defaultConfig() {
   // layout: device flight-screen layout (0 = classic, 1 = big image).
-  return { mode: 'radius', lat: null, lon: null, radiusKm: 50, callsign: '', layout: 0 };
+  // theme: accent colour, mirrored onto the device screen.
+  return { mode: 'radius', lat: null, lon: null, radiusKm: 50, callsign: '', layout: 0, theme: '#2ea8ff' };
 }
 
 function loadDevices() {
@@ -96,6 +97,7 @@ function setConfig(id, patch) {
   if (typeof patch.radiusKm === 'number') c.radiusKm = Math.min(100, Math.max(1, patch.radiusKm));
   if (typeof patch.callsign === 'string') c.callsign = patch.callsign.trim().toUpperCase().slice(0, 8);
   if (patch.layout === 0 || patch.layout === 1) c.layout = patch.layout;
+  if (typeof patch.theme === 'string' && /^#[0-9a-f]{6}$/i.test(patch.theme)) c.theme = patch.theme.toLowerCase();
   d.config = c;
 
   // A change to WHAT we track needs a tracking reset + fresh poll; a
@@ -148,7 +150,7 @@ function send(d, obj) {
 
 function sendCfg(d) {
   send(d, { t: 'cfg', mode: d.config.mode, radiusKm: d.config.radiusKm,
-            cs: d.config.callsign, layout: d.config.layout });
+            cs: d.config.callsign, layout: d.config.layout, th: d.config.theme });
 }
 
 function sendFlight(d) {

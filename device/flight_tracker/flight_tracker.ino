@@ -68,6 +68,7 @@ void handleMessage(uint8_t* payload, size_t len) {
     showWaiting(deviceId, modeLine);
 
   } else if (!strcmp(t, "cfg")) {
+    if (doc["th"].is<const char*>()) setThemeColor(doc["th"] | "");
     if (doc["layout"].is<int>()) setDisplayLayout(doc["layout"] | 0);
     const char* mode = doc["mode"] | "radius";
     if (!strcmp(mode, "flight")) {
