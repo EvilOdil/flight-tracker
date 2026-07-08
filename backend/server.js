@@ -129,6 +129,47 @@ async function calibrationJpg(applyLuts) {
   return calCache[key];
 }
 
+// PHOTO_CAL=3: green-gamma tuning grid. Six columns (white dots at the top:
+// 1 dot = leftmost), each rendering the same four rows — dark grey 64,
+// light grey 192, orange, sky blue — through the tone pipeline with an
+// increasingly strong green trim. The user picks the column whose greys are
+// neutral AND whose orange is orange; that gamma becomes the default.
+const GRID_G = [1.0, 1.15, 1.3, 1.45, 1.6, 1.75];
+let gridCache = null;
+async function tuningGridJpg() {
+  if (gridCache) return gridCache;
+  const W = PHOTO_W, H = PHOTO_H;
+  const data = Buffer.alloc(W * H * 3);
+  const rows = [[64, 64, 64], [192, 192, 192], [255, 165, 0], [135, 180, 235]];
+  const lutRB = channelLut(1.0);
+  const lutGs = GRID_G.map((g) => channelLut(g));
+  const colW = W / GRID_G.length, rowH = H / (rows.length + 0.5);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 3;
+      const col = Math.min(GRID_G.length - 1, Math.floor(x / colW));
+      // top strip: white dot markers (col+1 dots), raw white for visibility
+      if (y < rowH * 0.5) {
+        const inCol = x - col * colW;
+        const dot = Math.floor(inCol / 12);
+        const isDot = dot < col + 1 && (inCol % 12) < 8 && y > 4 && y < 16;
+        const v = isDot ? 255 : 0;
+        data[i] = v; data[i + 1] = v; data[i + 2] = v;
+        continue;
+      }
+      const row = Math.min(rows.length - 1, Math.floor((y - rowH * 0.5) / rowH));
+      const c = rows[row];
+      data[i] = lutRB[c[0]];
+      data[i + 1] = lutGs[col][c[1]];
+      data[i + 2] = lutRB[c[2]];
+    }
+  }
+  gridCache = await sharp(data, { raw: { width: W, height: H, channels: 3 } })
+    .jpeg({ quality: 95, progressive: false, chromaSubsampling: '4:4:4' })
+    .toBuffer();
+  return gridCache;
+}
+
 // Aircraft photo for the device's Classic layout: planespotters thumbnail,
 // resized server-side to the panel box, baseline JPEG (TJpg_Decoder can't do
 // progressive), cached on disk by hex. Requested ONLY by devices actually in
@@ -136,11 +177,12 @@ async function calibrationJpg(applyLuts) {
 // device falls back to its built-in silhouette bitmaps.
 app.get('/api/aircraft/:hex/photo', async (req, res) => {
   const cal = process.env.PHOTO_CAL;
-  if (cal === '1' || cal === '2') {
+  if (cal === '1' || cal === '2' || cal === '3') {
     res.set('content-type', 'image/jpeg');
     res.set('cache-control', 'no-store');
-    res.set('x-photographer', cal === '2' ? 'CAL PATTERN (compensated)' : 'CAL PATTERN (raw)');
-    return res.send(await calibrationJpg(cal === '2'));
+    res.set('x-photographer', cal === '3' ? 'TUNING GRID (pick a column)'
+      : cal === '2' ? 'CAL PATTERN (compensated)' : 'CAL PATTERN (raw)');
+    return res.send(cal === '3' ? await tuningGridJpg() : await calibrationJpg(cal === '2'));
   }
   const hex = String(req.params.hex).toLowerCase().replace(/[^0-9a-f]/g, '').slice(0, 6);
   if (hex.length !== 6) return res.status(400).json({ error: 'bad hex' });
