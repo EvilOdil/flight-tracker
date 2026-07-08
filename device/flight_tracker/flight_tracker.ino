@@ -68,6 +68,7 @@ void handleMessage(uint8_t* payload, size_t len) {
     showWaiting(deviceId, modeLine);
 
   } else if (!strcmp(t, "cfg")) {
+    if (doc["layout"].is<int>()) setDisplayLayout(doc["layout"] | 0);
     const char* mode = doc["mode"] | "radius";
     if (!strcmp(mode, "flight")) {
       modeLine = "Mode: flight " + String(doc["cs"] | "?");
@@ -75,6 +76,14 @@ void handleMessage(uint8_t* payload, size_t len) {
       modeLine = "Mode: radius " + String(doc["radiusKm"] | 0) + " km";
     }
     if (!tracking) showWaiting(deviceId, modeLine);
+
+  } else if (!strcmp(t, "netreset")) {
+    // "Change network" from the web app: wipe Wi-Fi creds and reboot into the
+    // setup portal (same path as holding BOOT for 3 s).
+    Serial.println("[net] reset requested -> setup portal");
+    portal.wipe();
+    delay(200);
+    ESP.restart();
   }
 }
 

@@ -33,6 +33,14 @@ app.put('/api/devices/:id/config', (req, res) => {
   res.json(cfg);
 });
 
+// "Change network": push a reset command so the device reboots into its Wi-Fi
+// setup portal. 409 if the device isn't currently connected.
+app.post('/api/devices/:id/reset-network', (req, res) => {
+  const ok = tracker.resetNetwork(req.params.id.toUpperCase());
+  if (!ok) return res.status(409).json({ error: 'device offline' });
+  res.json({ ok: true });
+});
+
 // --- Device WebSocket --------------------------------------------------------
 
 const server = http.createServer(app);

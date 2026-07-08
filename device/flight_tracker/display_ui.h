@@ -38,19 +38,35 @@ inline void showBootScreen() {
 #endif
 }
 
-// Tested dynamic flight renderer (proportional layout, 200x50 bitmap).
-inline void showFlightInfo(const String& flight, const String& airline,
-                           const String& route, const String& aircraft,
-                           const unsigned char* planeBitmap) {
-  // Skip the repaint when nothing visible changed (backend may resend the
-  // same "flight" frame). Gauges are updated separately by the caller.
-  String key = flight + '\x1f' + airline + '\x1f' + route + '\x1f' + aircraft;
-  if (uiAnim_ == UI_ANIM_NONE && key == lastFlightKey_) return;
-  lastFlightKey_ = key;
+// Flight-screen layout, chosen from the web app (cfg "layout"):
+//   0 = classic   — even spacing, small 200x50 silhouette pinned at the bottom.
+//   1 = big image — text packed at the top, silhouette enlarged to fill a much
+//                   larger lower panel.
+static uint8_t flightLayout_ = 0;
+inline void setDisplayLayout(uint8_t n) { flightLayout_ = n ? 1 : 0; }
 
-  uiAnim_ = UI_ANIM_NONE;
-  tft.fillScreen(TFT_BLACK);
+// Nearest-neighbour draw of a 1-bpp MSB-first bitmap scaled to fit a dst rect,
+// preserving aspect ratio and centering. Only set bits are drawn (transparent
+// background). Used to blow the aircraft silhouette up for the big-image layout.
+inline void drawBitmapFit(const unsigned char* bmp, int sw, int sh,
+                          int dstX, int dstY, int dstW, int dstH, uint16_t color) {
+  float sc = min((float)dstW / sw, (float)dstH / sh);
+  int w = (int)(sw * sc), h = (int)(sh * sc);
+  int ox = dstX + (dstW - w) / 2, oy = dstY + (dstH - h) / 2;
+  int byteW = (sw + 7) / 8;
+  for (int y = 0; y < h; y++) {
+    const unsigned char* row = bmp + (int)(y / sc) * byteW;
+    for (int x = 0; x < w; x++) {
+      int sx = (int)(x / sc);
+      if (row[sx >> 3] & (0x80 >> (sx & 7))) tft.drawPixel(ox + x, oy + y, color);
+    }
+  }
+}
 
+// Layout 0: the tested proportional layout (200x50 bitmap pinned at bottom).
+inline void drawFlightClassic(const String& flight, const String& airline,
+                              const String& route, const String& aircraft,
+                              const unsigned char* planeBitmap) {
   int screenW = tft.width();
   int screenH = tft.height();
   int marginLeft = screenW * 0.06;
@@ -87,6 +103,48 @@ inline void showFlightInfo(const String& flight, const String& airline,
   int planeX = (screenW - 200) / 2;
   int planeY = screenH - 60;
   tft.drawBitmap(planeX, planeY, planeBitmap, 200, 50, COLOR_LABEL);
+}
+
+// Layout 1: text packed tight at the top; silhouette enlarged into the freed
+// lower ~half of the screen.
+inline void drawFlightCompact(const String& flight, const String& airline,
+                              const String& route, const String& aircraft,
+                              const unsigned char* planeBitmap) {
+  int W = tft.width(), H = tft.height();
+  int mx = W * 0.06, endX = W - mx;
+
+  tft.setCursor(mx, H * 0.03);  tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("FLIGHT");
+  tft.setCursor(mx, H * 0.075); tft.setTextColor(COLOR_VALUE); tft.setTextSize(3); tft.println(flight);
+
+  tft.setCursor(mx, H * 0.155); tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("AIRLINE");
+  tft.setCursor(mx, H * 0.195); tft.setTextColor(COLOR_VALUE); tft.setTextSize(2); tft.println(airline);
+
+  tft.setCursor(mx, H * 0.26);  tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("ROUTE");
+  tft.setCursor(mx, H * 0.30);  tft.setTextColor(COLOR_VALUE); tft.setTextSize(2); tft.println(route);
+
+  tft.setCursor(mx, H * 0.365); tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("AIRCRAFT");
+  tft.setCursor(mx, H * 0.405); tft.setTextColor(COLOR_VALUE); tft.setTextSize(2); tft.println(aircraft);
+
+  tft.drawLine(mx, H * 0.47, endX, H * 0.47, COLOR_LINE);
+  drawBitmapFit(planeBitmap, 200, 50, mx, H * 0.49, W - 2 * mx, H * 0.47, COLOR_LABEL);
+}
+
+// Dynamic flight renderer. Dispatches to the layout picked from the web app.
+inline void showFlightInfo(const String& flight, const String& airline,
+                           const String& route, const String& aircraft,
+                           const unsigned char* planeBitmap) {
+  // Skip the repaint when nothing visible changed (backend may resend the same
+  // "flight" frame). Layout is part of the key so a layout switch redraws.
+  // Gauges are updated separately by the caller.
+  String key = String((int)flightLayout_) + '\x1f' + flight + '\x1f' + airline
+             + '\x1f' + route + '\x1f' + aircraft;
+  if (uiAnim_ == UI_ANIM_NONE && key == lastFlightKey_) return;
+  lastFlightKey_ = key;
+
+  uiAnim_ = UI_ANIM_NONE;
+  tft.fillScreen(TFT_BLACK);
+  if (flightLayout_ == 1) drawFlightCompact(flight, airline, route, aircraft, planeBitmap);
+  else                    drawFlightClassic(flight, airline, route, aircraft, planeBitmap);
 }
 
 // Generic status screen: big title + up to 5 detail lines.

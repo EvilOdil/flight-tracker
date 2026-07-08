@@ -41,7 +41,8 @@ function bitmapFamily(typeCode) {
 const devices = new Map();
 
 function defaultConfig() {
-  return { mode: 'radius', lat: null, lon: null, radiusKm: 50, callsign: '' };
+  // layout: device flight-screen layout (0 = classic, 1 = big image).
+  return { mode: 'radius', lat: null, lon: null, radiusKm: 50, callsign: '', layout: 0 };
 }
 
 function loadDevices() {
@@ -87,18 +88,37 @@ function getOrCreateDevice(id) {
 
 function setConfig(id, patch) {
   const d = getOrCreateDevice(id);
-  const c = { ...d.config };
+  const prev = d.config;
+  const c = { ...prev };
   if (patch.mode === 'radius' || patch.mode === 'flight') c.mode = patch.mode;
   if (typeof patch.lat === 'number' && patch.lat >= -90 && patch.lat <= 90) c.lat = patch.lat;
   if (typeof patch.lon === 'number' && patch.lon >= -180 && patch.lon <= 180) c.lon = patch.lon;
   if (typeof patch.radiusKm === 'number') c.radiusKm = Math.min(100, Math.max(1, patch.radiusKm));
   if (typeof patch.callsign === 'string') c.callsign = patch.callsign.trim().toUpperCase().slice(0, 8);
+  if (patch.layout === 0 || patch.layout === 1) c.layout = patch.layout;
   d.config = c;
-  // Reset tracking so the new config takes effect immediately.
-  d.target = null; d.lastPushed = null; d.flightMeta = null; d.lostSince = 0; d.nextPollAt = 0;
+
+  // A change to WHAT we track needs a tracking reset + fresh poll; a
+  // presentation-only change (layout) must NOT drop the current flight.
+  const trackingChanged = c.mode !== prev.mode || c.lat !== prev.lat || c.lon !== prev.lon
+    || c.radiusKm !== prev.radiusKm || c.callsign !== prev.callsign;
+  if (trackingChanged) {
+    d.target = null; d.lastPushed = null; d.flightMeta = null; d.lostSince = 0; d.nextPollAt = 0;
+  }
   saveDevices();
   sendCfg(d);
+  // Redraw the device immediately in the (possibly new) layout without a re-poll.
+  if (!trackingChanged && d.target && d.flightMeta) sendFlight(d);
   return c;
+}
+
+// "Change network": tell the device to wipe Wi-Fi creds and reboot into its
+// setup portal. Returns false if the device isn't currently connected.
+function resetNetwork(id) {
+  const d = devices.get(id);
+  if (!d || !d.socket || d.socket.readyState !== 1) return false;
+  send(d, { t: 'netreset' });
+  return true;
 }
 
 // --- WebSocket plumbing ------------------------------------------------------
@@ -127,7 +147,8 @@ function send(d, obj) {
 }
 
 function sendCfg(d) {
-  send(d, { t: 'cfg', mode: d.config.mode, radiusKm: d.config.radiusKm, cs: d.config.callsign });
+  send(d, { t: 'cfg', mode: d.config.mode, radiusKm: d.config.radiusKm,
+            cs: d.config.callsign, layout: d.config.layout });
 }
 
 function sendFlight(d) {
@@ -314,4 +335,4 @@ function start() {
   setInterval(() => tick().catch((e) => console.error('[tick]', e)), 1000);
 }
 
-module.exports = { start, attachSocket, detachSocket, setConfig, getOrCreateDevice, status, listDevices };
+module.exports = { start, attachSocket, detachSocket, setConfig, resetNetwork, getOrCreateDevice, status, listDevices };
