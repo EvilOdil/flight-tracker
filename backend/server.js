@@ -19,6 +19,24 @@ const PHOTO_W = 282;
 const PHOTO_H = 217;
 const PHOTO_DIR = path.join(__dirname, 'data', 'photos');
 
+// Panel colour compensation: the device's TN glass renders midtone neutrals
+// with a pink cast (green response sags mid-range; full-scale colours are
+// fine, which is why text looks right). Pre-distort each channel with an
+// inverse gamma so greys land grey ON THE PANEL. Endpoints are pinned, so
+// whites/blacks are untouched. Tune via env without code changes:
+// >1 darkens a channel's midtones, <1 lifts them.
+const PANEL_GAMMA_R = parseFloat(process.env.PANEL_GAMMA_R || '1.08');
+const PANEL_GAMMA_G = parseFloat(process.env.PANEL_GAMMA_G || '0.88');
+const PANEL_GAMMA_B = parseFloat(process.env.PANEL_GAMMA_B || '1.06');
+function gammaLut(g) {
+  const lut = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) lut[i] = Math.round(255 * Math.pow(i / 255, g));
+  return lut;
+}
+const LUT_R = gammaLut(PANEL_GAMMA_R);
+const LUT_G = gammaLut(PANEL_GAMMA_G);
+const LUT_B = gammaLut(PANEL_GAMMA_B);
+
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -59,9 +77,11 @@ app.post('/api/devices/:id/reset-network', (req, res) => {
 app.get('/api/aircraft/:hex/photo', async (req, res) => {
   const hex = String(req.params.hex).toLowerCase().replace(/[^0-9a-f]/g, '').slice(0, 6);
   if (hex.length !== 6) return res.status(400).json({ error: 'bad hex' });
-  // v2: 4:4:4 chroma — the default 4:2:0 subsampling halves colour resolution,
-  // which visibly smears hues on the small TFT (looked like a conversion bug).
-  const file = path.join(PHOTO_DIR, `${hex}.v2.jpg`);
+  // v3: 4:4:4 chroma (4:2:0 smears hues at this size) + per-channel panel
+  // gamma compensation (see LUTs above). Cache key includes the gamma values
+  // so retuning via env regenerates stale thumbs automatically.
+  const gTag = `${PANEL_GAMMA_R}-${PANEL_GAMMA_G}-${PANEL_GAMMA_B}`;
+  const file = path.join(PHOTO_DIR, `${hex}.v3.${gTag}.jpg`);
   const metaFile = path.join(PHOTO_DIR, `${hex}.json`);
   try {
     if (!fs.existsSync(file)) {
@@ -69,8 +89,16 @@ app.get('/api/aircraft/:hex/photo', async (req, res) => {
       if (!p) return res.status(404).json({ error: 'no photo' });
       const r = await fetch(p.src, { headers: { 'user-agent': upstream.USER_AGENT } });
       if (!r.ok) return res.status(404).json({ error: 'photo fetch failed' });
-      const jpg = await sharp(Buffer.from(await r.arrayBuffer()))
+      const { data, info } = await sharp(Buffer.from(await r.arrayBuffer()))
         .resize(PHOTO_W, PHOTO_H, { fit: 'inside' })
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      for (let i = 0; i < data.length; i += info.channels) {
+        data[i] = LUT_R[data[i]];
+        data[i + 1] = LUT_G[data[i + 1]];
+        data[i + 2] = LUT_B[data[i + 2]];
+      }
+      const jpg = await sharp(data, { raw: info })
         .jpeg({ quality: 88, progressive: false, chromaSubsampling: '4:4:4' })
         .toBuffer();
       fs.mkdirSync(PHOTO_DIR, { recursive: true });

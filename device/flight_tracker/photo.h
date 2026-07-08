@@ -16,7 +16,15 @@ extern TFT_eSPI tft;
 #define PHOTO_FETCH_TIMEOUT_MS 10000
 
 static bool photoPushBlock(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
-  tft.pushImage(x, y, w, h, bitmap);
+  // Draw pixel-by-pixel instead of one pushImage stream. The decoded output
+  // is verified correct (host-decoded with the same tjpgd.c); the corruption
+  // seen on hardware (blocky pastel/pink garbage) is a byte-phase slip in
+  // long back-to-back parallel-bus pixel streams. Per-pixel addressing
+  // re-syncs the bus at every pixel so a slip can never propagate. The photo
+  // draws once per flight, so the extra ~0.5 s is invisible in practice.
+  for (uint16_t j = 0; j < h; j++)
+    for (uint16_t i = 0; i < w; i++)
+      tft.drawPixel(x + i, y + j, bitmap[j * w + i]);
   return true;
 }
 
@@ -56,11 +64,8 @@ inline bool drawAircraftPhoto(const String& url, int x, int y, int w, int h,
 
   uint16_t jw = 0, jh = 0;
   TJpgDec.setJpgScale(1);            // backend already sized it to the box
-  // Byte order, verified against the TFT_eSPI parallel source: with the tft
-  // default _swapBytes=false, pushPixels() writes buffers via tft_Write_16S,
-  // i.e. it EXPECTS pre-swapped pixels — which is exactly what the decoder
-  // emits with setSwapBytes(true). Net result matches the text/fill path.
-  TJpgDec.setSwapBytes(true);
+  // Native byte order: drawPixel takes plain RGB565 like every text colour.
+  TJpgDec.setSwapBytes(false);
   TJpgDec.setCallback(photoPushBlock);
   if (TJpgDec.getJpgSize(&jw, &jh, buf, len) != JDR_OK
       || jw == 0 || jw > w || jh > h) { free(buf); return false; }
