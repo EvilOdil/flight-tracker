@@ -6,3 +6,8 @@ device/**/build/
 *.bin
 *.elf
 .DS_Store
+# display_image_test: local test photos (possibly copyrighted) + generated
+# PROGMEM header — regenerate with fetch_test_photos.py / convert_images.py
+display_image_test/images/
+display_image_test/images_data.h
+__pycache__/
