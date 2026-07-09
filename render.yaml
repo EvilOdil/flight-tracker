@@ -10,8 +10,10 @@ services:
     plan: free
     healthCheckPath: /api/devices
     envVars:
-      # Calibration mode (server.js): "1" = raw test pattern, "2" = pattern
-      # through the tone LUTs, "3" = green-gamma tuning grid, "0" = photos.
-      # Calibrated 2026-07-09 (tone scale + piecewise green curve) — keep "0".
+      # Photo mode (server.js): "0" = real aircraft photos (production),
+      # "1" = raw panel test pattern served instead of every photo (hardware
+      # diagnosis only — this is how the ILI9486-vs-ILI9488 driver mismatch
+      # was found). Keep "0". The former tone/green calibration modes and
+      # their PANEL_* env vars were removed 2026-07-09 with the driver fix.
       - key: PHOTO_CAL
         value: "0"

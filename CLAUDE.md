@@ -40,17 +40,22 @@ PLAN.md                  Original architecture plan (reference, not a spec to "f
    The clone parallel bus slips byte phase on long variable-pixel streams → pastel garbage.
    `photo.h` draws per-pixel via `drawPixel` deliberately. Full-screen fills are safe only
    because they are byte-symmetric colors.
-5. **Never touch the panel calibration constants casually** (`PANEL_TONE_GAMMA`,
-   `PANEL_TONE_MAX=148`, `PANEL_GREEN_CURVE='0:0,8:3,57:29,68:68,80:80'`, 4:4:4 q88
-   baseline JPEG in server.js). These are *measured on the physical glass* over multiple
-   on-device tuning rounds — the clone panel has a non-monotonic (folded) brightness
-   response that no amount of code reasoning can re-derive. Tuning goes through env vars,
-   never by editing defaults, and every tuning value MUST stay part of the photo cache
-   filename so stale renders can't serve.
+5. **Never add server-side photo color correction back without on-glass proof.** The
+   2026-07 "folded panel response" saga (tone-gamma + ceiling + piecewise green LUTs,
+   multiple on-device tuning rounds) turned out to be a TFT driver mismatch — with
+   `ILI9488_DRIVER` the panel renders raw photos correctly, and the whole LUT layer was
+   removed from server.js (implementation lives in git history). What remains untouchable
+   there: JPEG q88, **4:4:4** (4:2:0 smears hues at 282×217), **baseline** (TJpg_Decoder
+   cannot decode progressive), and: any change to photo processing MUST bump the cache
+   filename version (`<hex>.v4.jpg` today) so stale renders can't serve.
 6. **Never switch the TFT driver in code review**. The driver define lives OUTSIDE the repo
-   in `~/Arduino/libraries/TFT_eSPI/User_Setup.h` (currently `ILI9486_DRIVER`). HX8357D was
-   tried and produced a dead-black screen. Untried candidates (ILI9481, ST7796, R61581,
-   RM68140) are hardware experiments requiring the user at the device — never a casual edit.
+   in `~/Arduino/libraries/TFT_eSPI/User_Setup.h` — currently `ILI9488_DRIVER`, confirmed
+   on-glass 2026-07-09 (the clone panel's real controller; ILI9486_DRIVER mostly worked but
+   had a broken gamma/tone response that a backend LUT layer chased for days). HX8357D was
+   tried and produced a dead-black screen. A pre-ILI9486 backup sits next to it as
+   `User_Setup.h.bak-ili9486-*`. Driver swaps are hardware experiments requiring the user
+   at the device — never a casual edit, and only ever change the driver line, never the
+   pin map (pins there mirror Iron Rule 1).
 7. **Never re-add touch input** without an external XPT2046 module plan. The shield's bare
    4-wire resistive panel shares LCD pins; reading it via ADC froze the display. Full
    post-mortem is in project memory. Also: never name any macro `TOUCH_CS` (TFT_eSPI hijacks
@@ -125,13 +130,15 @@ IP printed as fallback — keep all three signup paths working.
   firmware builds absolute photo URLs from its stored server host + the relative `img` path;
   keep photo URLs relative in frames.
 - **Photo pipeline** (server.js): lookup via upstream.js → fetch thumb → sharp resize to
-  282×217 fit-inside → per-pixel calibration LUTs → JPEG q88, 4:4:4, **baseline**
-  (TJpg_Decoder cannot decode progressive JPEG). Disk cache keyed
-  `<hex>.v3.<full-calibration-tag>.jpg`. 404 → device falls back to silhouette bitmaps —
+  282×217 fit-inside → JPEG q88, 4:4:4, **baseline** (TJpg_Decoder cannot decode
+  progressive JPEG). No color processing (see Iron Rule 5 — the LUT layer was removed
+  2026-07-09 with the ILI9488 driver fix). Disk cache keyed `<hex>.v4.jpg`; bump the
+  version on any processing change. 404 → device falls back to silhouette bitmaps —
   the photo path must ALWAYS fail soft; a missing/broken photo may never blank the screen
   or stall the device loop.
-- `PHOTO_CAL` env (render.yaml): 0 = real photos (production), 1/2/3 = calibration test
-  patterns. Leave "0" unless running a calibration session with the user at the device.
+- `PHOTO_CAL` env (render.yaml): 0 = real photos (production), 1 = raw panel test pattern
+  served instead of every photo (hardware diagnosis). Leave "0" unless debugging the panel
+  with the user at the device.
 - REST endpoints return proper status codes the UI depends on (e.g. 409 when
   `reset-network` targets an offline device → UI alert). Match that pattern for new
   endpoints; errors are structured, never 200-with-error-body.
@@ -174,8 +181,11 @@ IP printed as fallback — keep all three signup paths working.
   the calibration saga proved the emulator-free truth lives only on the panel.
 - **When the display shows garbage**, the cause ranking from this project's history:
   (1) GPIO conflict with the parallel bus, (2) blocking Serial with no monitor,
-  (3) byte-phase slip from block pixel pushes, (4) the panel's folded response — in that
-  order. Check these before inventing new theories.
+  (3) byte-phase slip from block pixel pushes, (4) wrong TFT driver profile (the
+  "folded response" saga was ILI9486_DRIVER driving an ILI9488 panel; if colors/tones
+  are systematically wrong, suspect the driver before writing correction code) — in that
+  order. Check these before inventing new theories. Also remember `invertDisplay`/MADCTL
+  state survives soft resets — hard power-cycle before trusting a "broken" panel.
 - **Free-tier mindset**: every upstream call, every device fetch, every repaint must
   justify itself. The system's reliability comes from doing less: dedup keys, demand-driven
   fetches, layered caches, and fail-soft fallbacks at every remote boundary.

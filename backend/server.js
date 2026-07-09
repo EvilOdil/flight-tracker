@@ -19,64 +19,14 @@ const PHOTO_W = 282;
 const PHOTO_H = 217;
 const PHOTO_DIR = path.join(__dirname, 'data', 'photos');
 
-// Panel tone compensation. The clone glass has a NON-MONOTONIC response:
-// steep brightening from black up to input ~PANEL_TONE_MAX, a fold (darker!)
-// through the upper mid-range, recovering only at full scale — measured with
-// the PHOTO_CAL pattern (light grey rendered darker than dark grey; sky blue
-// went purple because its green channel sat in the fold). A folded curve is
-// not invertible, so instead all photo tones are compressed into the
-// monotonic zone: pre-darken with a gamma (the panel's steep low end lifts
-// it back) and ceiling at the fold threshold. The SAME curve on every
-// channel means hues can no longer twist; the cost is slightly compressed
-// highlights. Identity: PANEL_TONE_GAMMA=1 PANEL_TONE_MAX=255.
-const PANEL_TONE_GAMMA = parseFloat(process.env.PANEL_TONE_GAMMA || '2.2');
-// 148: with 160 the top of the compressed range still brushed the start of
-// the fold (orange's red ceiling sagged -> read yellow-green on glass).
-const PANEL_TONE_MAX = parseInt(process.env.PANEL_TONE_MAX || '148', 10);
-// Per-channel trim on top of the tone curve, default neutral (green is
-// handled by the piecewise curve below instead — no single gamma fits).
-const PANEL_GAMMA_R = parseFloat(process.env.PANEL_GAMMA_R || '1.0');
-const PANEL_GAMMA_G = parseFloat(process.env.PANEL_GAMMA_G || '1.0');
-const PANEL_GAMMA_B = parseFloat(process.env.PANEL_GAMMA_B || '1.0');
-
-// Green correction, measured on-glass with the PHOTO_CAL=3 tuning grid
-// (2026-07-09): the panel's green excess is strongest in the darks and
-// vanishes by the upper mids — grey-64 wanted the gamma-1.3 column, orange
-// (green ~57 after toning) the 1.45 column, sky blue (green ~69) and
-// grey-192 (~79) wanted NO cut (stronger turned them purple/pink). A
-// piecewise-linear curve over the TONED green value hits all four; the
-// 57->68 segment is deliberately steep — that's what the glass measured.
-// Above the last anchor it follows identity.
-const GREEN_CURVE = (process.env.PANEL_GREEN_CURVE || '0:0,8:3,57:29,68:68,80:80')
-  .split(',').map((s) => s.split(':').map(Number));
-function greenCurveVal(t) {
-  if (t <= GREEN_CURVE[0][0]) return GREEN_CURVE[0][1];
-  for (let k = 1; k < GREEN_CURVE.length; k++) {
-    if (t <= GREEN_CURVE[k][0]) {
-      const [x0, y0] = GREEN_CURVE[k - 1];
-      const [x1, y1] = GREEN_CURVE[k];
-      return y0 + ((y1 - y0) * (t - x0)) / (x1 - x0);
-    }
-  }
-  const [xl, yl] = GREEN_CURVE[GREEN_CURVE.length - 1];
-  return yl + (t - xl);
-}
-
-function channelLut(gamma, isGreen = false) {
-  const lut = new Uint8Array(256);
-  for (let i = 0; i < 256; i++) {
-    // SCALE into [0, TONE_MAX] (not clip!): a hard ceiling crushed every
-    // bright value to the same level, desaturating bright hues (sky blue
-    // came out whitish). Scaling keeps channel ratios across the range.
-    let toned = PANEL_TONE_MAX * Math.pow(i / 255, PANEL_TONE_GAMMA);
-    if (isGreen) toned = greenCurveVal(toned);
-    lut[i] = Math.round(255 * Math.pow(Math.round(toned) / 255, gamma));
-  }
-  return lut;
-}
-const LUT_R = channelLut(PANEL_GAMMA_R);
-const LUT_G = channelLut(PANEL_GAMMA_G, true);
-const LUT_B = channelLut(PANEL_GAMMA_B);
+// NOTE (2026-07-09): this file used to carry per-pixel tone/green
+// compensation LUTs for the clone panel's apparent "folded" brightness
+// response. That whole saga turned out to be a TFT driver mismatch: with
+// ILI9488_DRIVER selected in TFT_eSPI's User_Setup.h (was ILI9486_DRIVER)
+// the panel renders photos correctly with NO server-side correction —
+// confirmed on the physical glass. The LUT implementation (tone gamma +
+// ceiling + piecewise green curve, all env-tunable) lives in git history
+// should a future panel batch need it back.
 
 const app = express();
 app.use(express.json());
@@ -110,21 +60,16 @@ app.post('/api/devices/:id/reset-network', (req, res) => {
   res.json({ ok: true });
 });
 
-// Panel calibration pattern (PHOTO_CAL=1): served INSTEAD of every aircraft
-// photo so the device draws it through the exact photo pipeline. Photograph
-// the screen, compare with the known pattern, derive the panel's channel
-// response, bake the inverse into the LUTs. Bypasses the compensation LUTs
-// on purpose — it must measure the raw panel.
+// Panel test pattern (PHOTO_CAL=1): served INSTEAD of every aircraft photo
+// so the device draws it through the exact photo pipeline. Photograph the
+// screen and compare with the known pattern to characterize the bare panel
+// (this is how the ILI9486-vs-ILI9488 driver mismatch was diagnosed).
 // Bands top->bottom: R ramp, G ramp, B ramp, grey ramp,
 //   patches [sky-blue, blue, red, green, orange, 50% grey],
 //   patches [white, black, 25% grey, 75% grey].
-// PHOTO_CAL=1 serves the raw pattern (measures the bare panel);
-// PHOTO_CAL=2 serves it THROUGH the tone-compensation LUTs (verifies the
-// compensation: grey order must come out correct, sky-blue must read blue).
-const calCache = {};
-async function calibrationJpg(applyLuts) {
-  const key = applyLuts ? 'lut' : 'raw';
-  if (calCache[key]) return calCache[key];
+let calCache = null;
+async function calibrationJpg() {
+  if (calCache) return calCache;
   const W = PHOTO_W, H = PHOTO_H;
   const data = Buffer.alloc(W * H * 3);
   const bandH = Math.floor(H / 6);
@@ -142,56 +87,15 @@ async function calibrationJpg(applyLuts) {
       else if (band === 3) c = [v, v, v];
       else if (band === 4) c = hues[Math.min(5, Math.floor((6 * x) / W))];
       else c = greys[Math.min(3, Math.floor((4 * x) / W))];
-      data[i] = applyLuts ? LUT_R[c[0]] : c[0];
-      data[i + 1] = applyLuts ? LUT_G[c[1]] : c[1];
-      data[i + 2] = applyLuts ? LUT_B[c[2]] : c[2];
+      data[i] = c[0];
+      data[i + 1] = c[1];
+      data[i + 2] = c[2];
     }
   }
-  calCache[key] = await sharp(data, { raw: { width: W, height: H, channels: 3 } })
+  calCache = await sharp(data, { raw: { width: W, height: H, channels: 3 } })
     .jpeg({ quality: 95, progressive: false, chromaSubsampling: '4:4:4' })
     .toBuffer();
-  return calCache[key];
-}
-
-// PHOTO_CAL=3: green-gamma tuning grid. Six columns (white dots at the top:
-// 1 dot = leftmost), each rendering the same four rows — dark grey 64,
-// light grey 192, orange, sky blue — through the tone pipeline with an
-// increasingly strong green trim. The user picks the column whose greys are
-// neutral AND whose orange is orange; that gamma becomes the default.
-const GRID_G = [1.0, 1.15, 1.3, 1.45, 1.6, 1.75];
-let gridCache = null;
-async function tuningGridJpg() {
-  if (gridCache) return gridCache;
-  const W = PHOTO_W, H = PHOTO_H;
-  const data = Buffer.alloc(W * H * 3);
-  const rows = [[64, 64, 64], [192, 192, 192], [255, 165, 0], [135, 180, 235]];
-  const lutRB = channelLut(1.0);
-  const lutGs = GRID_G.map((g) => channelLut(g));
-  const colW = W / GRID_G.length, rowH = H / (rows.length + 0.5);
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const i = (y * W + x) * 3;
-      const col = Math.min(GRID_G.length - 1, Math.floor(x / colW));
-      // top strip: white dot markers (col+1 dots), raw white for visibility
-      if (y < rowH * 0.5) {
-        const inCol = x - col * colW;
-        const dot = Math.floor(inCol / 12);
-        const isDot = dot < col + 1 && (inCol % 12) < 8 && y > 4 && y < 16;
-        const v = isDot ? 255 : 0;
-        data[i] = v; data[i + 1] = v; data[i + 2] = v;
-        continue;
-      }
-      const row = Math.min(rows.length - 1, Math.floor((y - rowH * 0.5) / rowH));
-      const c = rows[row];
-      data[i] = lutRB[c[0]];
-      data[i + 1] = lutGs[col][c[1]];
-      data[i + 2] = lutRB[c[2]];
-    }
-  }
-  gridCache = await sharp(data, { raw: { width: W, height: H, channels: 3 } })
-    .jpeg({ quality: 95, progressive: false, chromaSubsampling: '4:4:4' })
-    .toBuffer();
-  return gridCache;
+  return calCache;
 }
 
 // Aircraft photo for the device's Classic layout: planespotters thumbnail,
@@ -200,22 +104,20 @@ async function tuningGridJpg() {
 // Classic mode, so Standard-mode devices cost zero photo traffic. 404 -> the
 // device falls back to its built-in silhouette bitmaps.
 app.get('/api/aircraft/:hex/photo', async (req, res) => {
-  const cal = process.env.PHOTO_CAL;
-  if (cal === '1' || cal === '2' || cal === '3') {
+  if (process.env.PHOTO_CAL === '1') {
     res.set('content-type', 'image/jpeg');
     res.set('cache-control', 'no-store');
-    res.set('x-photographer', cal === '3' ? 'TUNING GRID (pick a column)'
-      : cal === '2' ? 'CAL PATTERN (compensated)' : 'CAL PATTERN (raw)');
-    return res.send(cal === '3' ? await tuningGridJpg() : await calibrationJpg(cal === '2'));
+    res.set('x-photographer', 'CAL PATTERN (raw)');
+    return res.send(await calibrationJpg());
   }
   const hex = String(req.params.hex).toLowerCase().replace(/[^0-9a-f]/g, '').slice(0, 6);
   if (hex.length !== 6) return res.status(400).json({ error: 'bad hex' });
-  // v3: 4:4:4 chroma (4:2:0 smears hues at this size) + panel tone
-  // compensation (see LUTs above). Cache key includes all tuning values so a
-  // retune via env regenerates stale thumbs automatically.
-  const curveTag = GREEN_CURVE.map((p) => p.join('_')).join('-');
-  const gTag = `${PANEL_TONE_GAMMA}-${PANEL_TONE_MAX}-${PANEL_GAMMA_R}-${PANEL_GAMMA_G}-${PANEL_GAMMA_B}-g${curveTag}`;
-  const file = path.join(PHOTO_DIR, `${hex}.v3.${gTag}.jpg`);
+  // v4: plain fit-inside resize, no colour processing (see driver note at the
+  // top). 4:4:4 chroma stays — 4:2:0 smears hues at this size — and baseline
+  // stays (TJpg_Decoder can't decode progressive). The version in the cache
+  // key is what invalidates stale renders; bump it if this processing ever
+  // changes again.
+  const file = path.join(PHOTO_DIR, `${hex}.v4.jpg`);
   const metaFile = path.join(PHOTO_DIR, `${hex}.json`);
   try {
     if (!fs.existsSync(file)) {
@@ -223,16 +125,8 @@ app.get('/api/aircraft/:hex/photo', async (req, res) => {
       if (!p) return res.status(404).json({ error: 'no photo' });
       const r = await fetch(p.src, { headers: { 'user-agent': upstream.USER_AGENT } });
       if (!r.ok) return res.status(404).json({ error: 'photo fetch failed' });
-      const { data, info } = await sharp(Buffer.from(await r.arrayBuffer()))
+      const jpg = await sharp(Buffer.from(await r.arrayBuffer()))
         .resize(PHOTO_W, PHOTO_H, { fit: 'inside' })
-        .raw()
-        .toBuffer({ resolveWithObject: true });
-      for (let i = 0; i < data.length; i += info.channels) {
-        data[i] = LUT_R[data[i]];
-        data[i + 1] = LUT_G[data[i + 1]];
-        data[i + 2] = LUT_B[data[i + 2]];
-      }
-      const jpg = await sharp(data, { raw: info })
         .jpeg({ quality: 88, progressive: false, chromaSubsampling: '4:4:4' })
         .toBuffer();
       fs.mkdirSync(PHOTO_DIR, { recursive: true });

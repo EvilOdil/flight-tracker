@@ -1,6 +1,9 @@
 // Flight Tracker device — ESP32-S3
 //
-// 3.5" TFT (TFT_eSPI, pins in the library's User_Setup.h) + five 28BYJ-48
+// 3.5" TFT (TFT_eSPI; pins AND driver in the library's User_Setup.h — must
+// be ILI9488_DRIVER: the clone panel renders correct colors only with the
+// 9488 init profile, confirmed on-glass 2026-07-09; ILI9486_DRIVER "worked"
+// but with a broken tone response) + five 28BYJ-48
 // steppers (speed, heading, altimeter x3). Receives compact JSON push frames
 // from the backend over WebSocket; all tracking config is done from the
 // phone web app served by the backend. See ../../PLAN.md.
