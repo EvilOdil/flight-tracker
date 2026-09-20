@@ -7,7 +7,9 @@ breaks the device, the deploy, or the look-and-feel in ways that are hard to tra
 ## 1. System map (do not restructure)
 
 ```
-device/flight_tracker/   ESP32-S3 firmware (Arduino, header-per-module, single .ino)
+device/flight_tracker/   ESP32-S3 firmware — display, Wi-Fi/WS, LEDs, speed gauge
+device/gauge_controller/ ESP32-WROOM-32 firmware — heading + 3 altimeter needles
+device/gauge_link_protocol.md  UART contract between the two boards (+ pin maps)
 backend/                 Node backend (express + ws), deployed on Render free tier
 backend/public/          Web app — ONE self-contained index.html (vanilla JS, no build step)
 backend/lib/tracker.js   Device registry, per-device config, WS protocol, flight push loop
@@ -17,8 +19,12 @@ render.yaml              Render blueprint — deploys from origin/main
 PLAN.md                  Original architecture plan (reference, not a spec to "fix")
 ```
 
-- Data flow: adsb.lol/adsbdb → backend poll loop → WS push → device. Web app talks REST to
-  the backend and never talks to the device directly.
+- Data flow: adsb.lol/adsbdb → backend poll loop → WS push → S3 → UART → gauge
+  controller. Web app talks REST to the backend and never talks to the device directly.
+- The gauge split exists because the S3 has 16 clean GPIOs and five ULN2003 motors need
+  20. The S3 computes ALL five needles' step targets and pushes every one over the link;
+  each board drives the slots it owns. Moving a motor between boards is a two-`config.h`
+  edit, never a protocol change.
 - The device dials OUT (wss://) to the internet-hosted backend; there is no inbound path to
   the device except its own captive portal in setup mode.
 - Keep this topology. Do not add device-side polling of external APIs, do not add a build
@@ -28,8 +34,11 @@ PLAN.md                  Original architecture plan (reference, not a spec to "f
 
 1. **Never assign stepper/peripheral GPIOs from the display bus**: 4,5,6,7,15,16,17,18
    (data) + 9,10,11,12 (RST/CS/DC/WR). Also reserved: 0, 19/20 (USB), 43/44 (UART0),
-   26–37 (flash/PSRAM). Violations freeze the display *after* the boot splash — the
-   nastiest possible symptom. Pin map + rationale live in `config.h`.
+   26–37 (flash/PSRAM, except 35 knowingly overridden for the LED strip). Violations
+   freeze the display *after* the boot splash — the nastiest possible symptom. Pin map
+   + rationale live in `config.h`. On the WROOM the equivalent traps are GPIO0 (a
+   ULN2003 input clamps the boot pull-up to ~1.8 V → boots into download mode) and
+   GPIO12 (MTDI strap); its pin map + rationale live in `device/gauge_controller/config.h`.
 2. **Never include TFT_eSPI (via display_ui.h/graphics.h) before WebServer.h** in the .ino.
    TFT_eSPI defines `FS_NO_GLOBALS` and breaks the ESP32 core build. Include order:
    `wifi_portal.h` FIRST, display headers after.
@@ -73,23 +82,33 @@ PLAN.md                  Original architecture plan (reference, not a spec to "f
 11. **Never commit secrets, `backend/data/`, or the photo cache.** `.gitignore` already
     covers `backend/data/`. There are no API keys in this system by design — keep it that
     way (adsb.lol and adsbdb are key-free; that was a deliberate architecture choice).
-12. **Never force-push or flash the device unless the user asks.** Flashing overwrites a
+12. **The UART gauge link is a compatibility contract**, exactly like the WS protocol —
+    the two boards are flashed separately, so only ADD optional trailing fields to a
+    frame; never rename or repurpose one. Spec: `device/gauge_link_protocol.md`.
+    Homing must stay fail-soft: a switch that never trips leaves its needle where it is
+    and treats that as zero. A dead switch may degrade one gauge, never the device.
+13. **Never force-push or flash the device unless the user asks.** Flashing overwrites a
     known-good state on physical hardware; a bad flash bricked the display once already.
 
 ## 3. Firmware rules (`device/flight_tracker/`)
 
 **Structure & style**
 - One `.ino` (setup/loop/message dispatch) + single-purpose headers (`display_ui.h`,
-  `graphics.h`, `gauges.h`, `wifi_portal.h`, `photo.h`, `theme.h`, `qr.h`, `config.h`,
-  `bitmaps.h`). New capability = new header, not a bigger .ino. `qrcodegen.c/.h` is
+  `graphics.h`, `gauges.h`, `stepper.h`, `gauge_link.h`, `wifi_portal.h`, `photo.h`,
+  `theme.h`, `qr.h`, `leds.h`, `config.h`, `bitmaps.h`). New capability = new header,
+  not a bigger .ino. `qrcodegen.c/.h` is
   vendored (ESP32 core ships a conflicting `qrcode.h`) — do not "upgrade" it to a library.
 - All hardware constants, pin maps, and feature flags (`UI_CREATIVE_SCREENS`,
   `UI_TOUCH_ENABLED`, `GAUGE_SERIAL_LOG`, `ALT3_ENABLED`) live in `config.h` only.
-- Verify EVERY firmware change with
+- `stepper.h` is duplicated byte-identically in BOTH sketch directories (Arduino cannot
+  share headers across sketches — same rationale as vendored `qrcodegen.c`). Edit one,
+  copy to the other, recompile both.
+- Verify EVERY firmware change by compiling BOTH sketches before declaring it done:
   `~/bin/arduino-cli compile --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc device/flight_tracker`
-  before declaring it done. When a feature flag exists, compile-check both states.
+  `~/bin/arduino-cli compile --fqbn esp32:esp32:esp32 device/gauge_controller`
+  When a feature flag exists, compile-check both states.
 
-**Flash budget** — currently ~93% of the default partition. Report the new percentage after
+**Flash budget** — S3 currently ~94% of the default partition (the controller is ~21%). Report the new percentage after
 any firmware change; if it crosses ~98%, the escape valve is the `huge_app` partition scheme
 (FQBN option), not deleting features. Prefer flash-cheap solutions (fonts over bitmaps,
 computed graphics over stored images).
