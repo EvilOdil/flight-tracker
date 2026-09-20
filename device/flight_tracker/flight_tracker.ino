@@ -3,10 +3,12 @@
 // 3.5" TFT (TFT_eSPI; pins AND driver in the library's User_Setup.h — must
 // be ILI9488_DRIVER: the clone panel renders correct colors only with the
 // 9488 init profile, confirmed on-glass 2026-07-09; ILI9486_DRIVER "worked"
-// but with a broken tone response) + five 28BYJ-48
-// steppers (speed, heading, altimeter x3). Receives compact JSON push frames
-// from the backend over WebSocket; all tracking config is done from the
-// phone web app served by the backend. See ../../PLAN.md.
+// but with a broken tone response) + the speed gauge stepper. The other four
+// 28BYJ-48 needles (heading, altimeter x3) live on an ESP32-WROOM-32 gauge
+// controller (device/gauge_controller/) over a UART link — the S3 ran out of
+// GPIOs. Receives compact JSON push frames from the backend over WebSocket;
+// all tracking config is done from the phone web app served by the backend.
+// See ../../PLAN.md and ../gauge_link_protocol.md.
 //
 // Libraries (Library Manager): TFT_eSPI, ArduinoJson (v7),
 //                              "WebSockets" by Markus Sattler (links2004).
@@ -21,6 +23,7 @@
 #include "wifi_portal.h"
 #include "gauges.h"
 #include "display_ui.h"
+#include "leds.h"
 
 TFT_eSPI tft = TFT_eSPI();
 Gauges gauges;
@@ -33,6 +36,46 @@ bool wsConnected = false;
 bool tracking = false;
 String modeLine = "Mode: not configured";
 unsigned long resetBtnDownAt = 0;
+
+// Passed to gauges.home(): homing blocks for seconds, so keep the boot
+// animation moving instead of freezing a half-drawn screen.
+void pumpDisplay() { displayTick(); }
+
+// Bench calibration console on the USB serial monitor. Same verbs as the
+// gauge link, so one monitor drives all five needles — the speed needle
+// locally, the other four forwarded to the gauge controller:
+//   T <s0> <s1> <s2> <s3> <s4>   jog needles to raw step positions (-1 = skip)
+//   H                            re-home the speed needle, then the controller
+// Homing blocks for seconds; that is fine for a deliberate bench command.
+void serialConsoleTick() {
+  static char line[80];
+  static uint8_t len = 0;
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\r') continue;
+    if (c != '\n') {
+      if (len < sizeof(line) - 1) line[len++] = c;
+      continue;
+    }
+    line[len] = '\0';
+    if (len && line[0] == 'T') {
+      long t[GAUGE_MOTOR_COUNT];
+      char* end;
+      const char* p = line + 1;
+      for (uint8_t i = 0; i < GAUGE_MOTOR_COUNT; i++) {
+        t[i] = strtol(p, &end, 10);
+        if (end == p) t[i] = -1; else p = end;
+      }
+      Serial.printf("[cal] jog %ld %ld %ld %ld %ld\n", t[0], t[1], t[2], t[3], t[4]);
+      gauges.setSteps(t);
+    } else if (len && line[0] == 'H') {
+      Serial.println("[cal] re-homing");
+      gauges.home(&pumpDisplay);
+      gauges.rehomeController();
+    }
+    len = 0;
+  }
+}
 
 String makeDeviceId() {
   uint64_t mac = ESP.getEfuseMac();
@@ -143,6 +186,12 @@ void setup() {
   displayBegin();
   showBootScreen();  // no-op when UI_CREATIVE_SCREENS is 0
   gauges.begin();
+  ledsBegin();
+  // Drive the speed needle onto its limit switch, then to its printed zero.
+  // Blocking, but this is setup() — nothing else is running yet, and the
+  // gauge controller homes its own four needles in parallel on its own boot.
+  showConnecting("calibrating gauges");
+  gauges.home(&pumpDisplay);
   pinMode(RESET_BTN_PIN, INPUT_PULLUP);
 
   net = portal.load();
@@ -179,6 +228,7 @@ void setup() {
 void loop() {
   ws.loop();
   gauges.run();
+  serialConsoleTick();
   displayTick();  // animates connecting / radar screens (UI_CREATIVE_SCREENS)
 
   // Hold BOOT for 3 s -> wipe config, back to setup portal.

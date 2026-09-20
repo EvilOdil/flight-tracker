@@ -54,6 +54,39 @@ inline uint8_t fitTextSize(const String& s, int maxWidthPx, uint8_t want) {
   return sz;
 }
 
+// Two-line word wrap for long values (airline / aircraft names): largest text
+// size <= `want` at which `s` fits maxWidthPx as at most two word-wrapped
+// lines. *split = index of the space to break at, -1 = fits on one line.
+// Preferred over fitTextSize where vertical room for a second line exists —
+// a wrapped size-3 line beats an unreadable single size-1 line.
+inline uint8_t wrapPlan(const String& s, int maxWidthPx, uint8_t want, int* split) {
+  for (uint8_t sz = want; sz >= 1; sz--) {
+    int maxChars = maxWidthPx / (6 * sz);
+    *split = -1;
+    if ((int)s.length() <= maxChars) return sz;  // one line at this size
+    int cut = -1;
+    for (int i = min((int)s.length() - 1, maxChars); i > 0; i--)
+      if (s.charAt(i) == ' ') { cut = i; break; }
+    if (cut > 0 && (int)s.length() - cut - 1 <= maxChars) { *split = cut; return sz; }
+    if (sz == 1) return 1;  // pathological: single line, library edge-wrap
+  }
+  return 1;  // unreachable
+}
+
+// Draw a value planned by wrapPlan. BOTH lines start at the same x so a
+// wrapped second line keeps the left column alignment of every other field.
+// Returns the pixel height consumed (one or two 8*size lines).
+inline int drawWrappedValue(const String& s, int x, int y, uint8_t sz, int split) {
+  tft.setTextSize(sz);
+  int lineH = 8 * sz;
+  tft.setCursor(x, y);
+  if (split < 0) { tft.println(s); return lineH; }
+  tft.println(s.substring(0, split));
+  tft.setCursor(x, y + lineH + 2);
+  tft.println(s.substring(split + 1));
+  return 2 * lineH + 2;
+}
+
 // Nearest-neighbour draw of a 1-bpp MSB-first bitmap scaled to fit a dst rect,
 // preserving aspect ratio and centering. Only set bits are drawn (transparent
 // background). Used to blow the aircraft silhouette up for the big-image layout.
@@ -74,10 +107,15 @@ inline void drawBitmapFit(const unsigned char* bmp, int sw, int sh,
 
 // Layout 0 "Standard": text only — the original label/value/divider style,
 // enlarged and spread over the full height freed by dropping the image.
+// Airline/aircraft names wrap to two left-aligned lines instead of shrinking:
+// each section has room for two size-3 lines before its divider (airline
+// ends <= 0.475H vs the 0.50H divider; aircraft <= 0.974H vs screen bottom).
 inline void drawFlightStandard(const String& flight, const String& airline,
                                const String& route, const String& aircraft) {
   int W = tft.width(), H = tft.height();
   int mx = W * 0.06, endX = W - mx, maxW = W - 2 * mx;
+  int split;
+  uint8_t sz;
 
   tft.setCursor(mx, H * 0.05);
   tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("FLIGHT");
@@ -87,8 +125,9 @@ inline void drawFlightStandard(const String& flight, const String& airline,
 
   tft.setCursor(mx, H * 0.31);
   tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("AIRLINE");
-  tft.setCursor(mx, H * 0.37);
-  tft.setTextColor(COLOR_VALUE); tft.setTextSize(fitTextSize(airline, maxW, 3)); tft.println(airline);
+  tft.setTextColor(COLOR_VALUE);
+  sz = wrapPlan(airline, maxW, 3, &split);
+  drawWrappedValue(airline, mx, H * 0.37, sz, split);
   tft.drawLine(mx, H * 0.50, endX, H * 0.50, COLOR_LINE);
 
   tft.setCursor(mx, H * 0.56);
@@ -99,33 +138,65 @@ inline void drawFlightStandard(const String& flight, const String& airline,
 
   tft.setCursor(mx, H * 0.81);
   tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("AIRCRAFT");
-  tft.setCursor(mx, H * 0.87);
-  tft.setTextColor(COLOR_VALUE); tft.setTextSize(fitTextSize(aircraft, maxW, 3)); tft.println(aircraft);
+  tft.setTextColor(COLOR_VALUE);
+  sz = wrapPlan(aircraft, maxW, 3, &split);
+  drawWrappedValue(aircraft, mx, H * 0.87, sz, split);
 }
 
 // Layout 1 "Classic": text packed tight at the top; real aircraft photo
 // (backend-fetched, resized server-side) fills the lower panel, with the
 // silhouette bitmap as fallback when no photo exists. This is the ONLY place
 // a photo is requested — Standard mode never touches the network.
+//
+// The text block flows: airline/aircraft may wrap to a second left-aligned
+// line (long names used to library-edge-wrap to x=0 and crowd the divider),
+// and everything below a wrapped value shifts down to keep the gaps. The
+// divider and photo box stay PINNED at 0.47H/0.49H — shrinking the photo box
+// below the backend's 217 px target would silently knock tall photos back to
+// the silhouette (drawAircraftPhoto rejects jh > bh). Section gaps absorb the
+// extra lines instead: uniform when everything is short, compressed (min
+// 5 px, incl. above the divider) in the worst wrapped case.
 inline void drawFlightClassic(const String& flight, const String& airline,
                               const String& route, const String& aircraft,
                               const unsigned char* planeBitmap, const String& imgUrl) {
   int W = tft.width(), H = tft.height();
-  int mx = W * 0.06, endX = W - mx;
+  int mx = W * 0.06, endX = W - mx, maxW = W - 2 * mx;
 
-  tft.setCursor(mx, H * 0.03);  tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("FLIGHT");
-  tft.setCursor(mx, H * 0.075); tft.setTextColor(COLOR_VALUE); tft.setTextSize(3); tft.println(flight);
+  int aSplit, cSplit;
+  uint8_t aSz = wrapPlan(airline, maxW, 2, &aSplit);
+  uint8_t cSz = wrapPlan(aircraft, maxW, 2, &cSplit);
+  uint8_t rSz = fitTextSize(route, maxW, 2);   // routes are short: single line
+  int aH = (aSplit < 0) ? 8 * aSz : 16 * aSz + 2;
+  int cH = (cSplit < 0) ? 8 * cSz : 16 * cSz + 2;
 
-  tft.setCursor(mx, H * 0.155); tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("AIRLINE");
-  tft.setCursor(mx, H * 0.195); tft.setTextColor(COLOR_VALUE); tft.setTextSize(2); tft.println(airline);
+  const int labelH = 16, labelGap = H * 0.010;
+  int divY = H * 0.47, topY = H * 0.03;
+  int content = (labelH + labelGap) * 4 + 24 + aH + 8 * rSz + cH;
+  int gap = (divY - topY - (int)(H * 0.02) - content) / 3;
+  gap = constrain(gap, 5, (int)(H * 0.03));
 
-  tft.setCursor(mx, H * 0.26);  tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("ROUTE");
-  tft.setCursor(mx, H * 0.30);  tft.setTextColor(COLOR_VALUE); tft.setTextSize(2); tft.println(route);
+  int y = topY;
+  tft.setCursor(mx, y); tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("FLIGHT");
+  y += labelH + labelGap;
+  tft.setCursor(mx, y); tft.setTextColor(COLOR_VALUE); tft.setTextSize(3); tft.println(flight);
+  y += 24 + gap;
 
-  tft.setCursor(mx, H * 0.365); tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("AIRCRAFT");
-  tft.setCursor(mx, H * 0.405); tft.setTextColor(COLOR_VALUE); tft.setTextSize(2); tft.println(aircraft);
+  tft.setCursor(mx, y); tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("AIRLINE");
+  y += labelH + labelGap;
+  tft.setTextColor(COLOR_VALUE);
+  y += drawWrappedValue(airline, mx, y, aSz, aSplit) + gap;
 
-  tft.drawLine(mx, H * 0.47, endX, H * 0.47, COLOR_LINE);
+  tft.setCursor(mx, y); tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("ROUTE");
+  y += labelH + labelGap;
+  tft.setCursor(mx, y); tft.setTextColor(COLOR_VALUE); tft.setTextSize(rSz); tft.println(route);
+  y += 8 * rSz + gap;
+
+  tft.setCursor(mx, y); tft.setTextColor(COLOR_LABEL); tft.setTextSize(2); tft.println("AIRCRAFT");
+  y += labelH + labelGap;
+  tft.setTextColor(COLOR_VALUE);
+  drawWrappedValue(aircraft, mx, y, cSz, cSplit);
+
+  tft.drawLine(mx, divY, endX, divY, COLOR_LINE);
 
   int by = H * 0.49, bw = W - 2 * mx, bh = H - by - 18;  // 18 px for the credit
   String credit;

@@ -1,138 +1,105 @@
-// Non-blocking cooperative driver for five 28BYJ-48 gauges.
+// Gauge facade for the S3 side of the two-board split.
 //
-// All motors advance at most one step per run() call (call run() every loop()).
-// Coils are de-energized once a needle reaches its target — the 28BYJ-48 gear
-// train holds position unpowered, saving ~1.2 W per motor.
+// Owns the dial-face maths for ALL five needles (PLAN.md §3 lives here, in one
+// place), drives the speed needle directly, and pushes every needle's target
+// over the UART link. The gauge controller applies the ones it owns.
 //
-// Homing: needles are assumed to sit on their zero mark at power-on; positions
-// are tracked in software from there (PLAN.md §3).
+// Needle indices are the link protocol's slot order and must not be reordered:
+//   0 speed | 1 heading | 2 alt 100s | 3 alt 1,000s | 4 alt 10,000s
 #pragma once
 #include <Arduino.h>
 #include "config.h"
-
-class GaugeStepper {
- public:
-  // wraps=true  -> circular scale (heading, altimeter 100s/1000s needles):
-  //                moves the shortest way around, position is modulo one rev.
-  // wraps=false -> end-stop scale (speed, altimeter 10,000s needle).
-  void begin(uint8_t in1, uint8_t in2, uint8_t in3, uint8_t in4, bool wraps) {
-    pins_[0] = in1; pins_[1] = in2; pins_[2] = in3; pins_[3] = in4;
-    wraps_ = wraps;
-    for (uint8_t p : pins_) { pinMode(p, OUTPUT); digitalWrite(p, LOW); }
-    pos_ = target_ = 0;
-    begun_ = true;
-  }
-
-  // Target as a fraction of one full revolution [0..1) for wrapping gauges,
-  // clamped [0..1] for end-stop gauges.
-  void moveToFraction(float frac) {
-    if (wraps_) {
-      frac -= floorf(frac);
-      long t = lroundf(frac * STEPS_PER_REV) % STEPS_PER_REV;
-      // Shortest path from current (mod one rev) position.
-      long cur = ((pos_ % STEPS_PER_REV) + STEPS_PER_REV) % STEPS_PER_REV;
-      long diff = t - cur;
-      if (diff > STEPS_PER_REV / 2) diff -= STEPS_PER_REV;
-      if (diff < -STEPS_PER_REV / 2) diff += STEPS_PER_REV;
-      target_ = pos_ + diff;
-    } else {
-      frac = constrain(frac, 0.0f, 1.0f);
-      target_ = lroundf(frac * STEPS_PER_REV);
-    }
-  }
-
-  bool moving() const { return pos_ != target_; }
-
-  // Advance at most one step if due. Returns true if it stepped.
-  bool run(unsigned long nowUs) {
-    if (!begun_) return false;  // disabled gauge: never touch its pins
-    if (pos_ == target_) {
-      if (energized_) { release(); }
-      return false;
-    }
-    if (nowUs - lastStepUs_ < STEP_INTERVAL_US) return false;
-    lastStepUs_ = nowUs;
-    pos_ += (target_ > pos_) ? 1 : -1;
-    writePhase(((pos_ % 4) + 4) % 4);
-    energized_ = true;
-    return true;
-  }
-
- private:
-  // Full-step 4-phase sequence, same coil order as the tested
-  // Stepper(IN1, IN3, IN2, IN4) wiring.
-  void writePhase(uint8_t ph) {
-    static const uint8_t seq[4][4] = {
-      {1, 0, 1, 0}, {0, 1, 1, 0}, {0, 1, 0, 1}, {1, 0, 0, 1},
-    };
-    for (uint8_t i = 0; i < 4; i++) digitalWrite(pins_[i], seq[ph][i]);
-  }
-  void release() {
-    for (uint8_t p : pins_) digitalWrite(p, LOW);
-    energized_ = false;
-  }
-
-  uint8_t pins_[4] = {0};
-  bool begun_ = false;
-  bool wraps_ = false;
-  bool energized_ = false;
-  long pos_ = 0, target_ = 0;
-  unsigned long lastStepUs_ = 0;
-};
+#include "stepper.h"
+#include "gauge_link.h"
 
 class Gauges {
  public:
   void begin() {
+    link_.begin();
     speed_.begin(SPD_IN1, SPD_IN2, SPD_IN3, SPD_IN4, false);
-    heading_.begin(HDG_IN1, HDG_IN2, HDG_IN3, HDG_IN4, true);
-    alt100_.begin(ALT1_IN1, ALT1_IN2, ALT1_IN3, ALT1_IN4, true);
-    alt1k_.begin(ALT2_IN1, ALT2_IN2, ALT2_IN3, ALT2_IN4, true);
-#if ALT3_ENABLED
-    alt10k_.begin(ALT3_IN1, ALT3_IN2, ALT3_IN3, ALT3_IN4, false);
-#endif
+    speed_.attachHome(SPD_HOME_PIN, SPD_HOME_DIR, SPD_HOME_OFFSET,
+                      SPD_HOME_MAX_STEPS);
+  }
+
+  // Drive the speed needle onto its zero mark. Blocking (worst case ~8 s at
+  // HOME_STEP_INTERVAL_US), so call it from setup() only; pump() is called
+  // once per step to keep the boot screen animating. The controller homes its
+  // own four needles in parallel with this, on its own power-on.
+  bool home(void (*pump)() = nullptr) {
+    bool ok = speed_.home(pump);
+    if (!ok) Serial.println("[gauges] speed needle: limit switch never tripped");
+    return ok;
   }
 
   void set(long altFt, int gsKt, int trackDeg) {
     altFt = constrain(altFt, 0L, (long)ALT_MAX_FT);
-    // Speed: linear over the printed sweep. Fraction of full motor rev.
-    float spdFrac = (float)(constrain(gsKt, SPEED_MIN_KT, SPEED_MAX_KT) - SPEED_MIN_KT)
-                    / (SPEED_MAX_KT - SPEED_MIN_KT) * (SPEED_SWEEP_DEG / 360.0f);
-    speed_.moveToFraction(spdFrac);
-    heading_.moveToFraction(trackDeg / 360.0f);
+    gsKt = constrain(gsKt, SPEED_MIN_KT, SPEED_MAX_KT);
+
+    // Speed: linear over the printed sweep, as a fraction of a full motor rev.
+    float spdFrac = (float)(gsKt - SPEED_MIN_KT) / (SPEED_MAX_KT - SPEED_MIN_KT)
+                    * (SPEED_SWEEP_DEG / 360.0f);
+    long t[GAUGE_MOTOR_COUNT];
+    t[0] = lroundf(spdFrac * STEPS_PER_REV);
+    t[1] = lroundf(trackDeg / 360.0f * STEPS_PER_REV);
     // Classic 3-needle sensitive altimeter.
-    alt100_.moveToFraction((altFt % 1000) / 1000.0f);
-    alt1k_.moveToFraction((altFt % 10000) / 10000.0f);
-    alt10k_.moveToFraction(altFt / 100000.0f);
+    t[2] = lroundf((altFt % 1000) / 1000.0f * STEPS_PER_REV);
+    t[3] = lroundf((altFt % 10000) / 10000.0f * STEPS_PER_REV);
+    t[4] = lroundf(altFt / 100000.0f * STEPS_PER_REV);
+
+    apply(t);
+    memcpy(last_, t, sizeof(last_));
+    haveLast_ = true;
 
     // Bench-testing aid: what each needle should show, in dial terms and in
-    // motor steps from zero (2048/rev) — compare against the real needles
-    // when the steppers get wired, and calibrate faces/ranges from this.
+    // motor steps from zero (2048/rev) — compare against the real needles and
+    // calibrate faces/ranges from this.
 #if GAUGE_SERIAL_LOG
     Serial.printf("[gauges] alt=%ld ft gs=%d kt trk=%d deg\n", altFt, gsKt, trackDeg);
-    Serial.printf("[gauges]   speed  %3d kt   -> %4ld steps (%5.1f deg on 270 sweep)\n",
-                  constrain(gsKt, SPEED_MIN_KT, SPEED_MAX_KT),
-                  lroundf(spdFrac * STEPS_PER_REV), spdFrac * 360.0f);
-    Serial.printf("[gauges]   heading %3d deg -> %4ld steps\n",
-                  trackDeg, lroundf(trackDeg / 360.0f * STEPS_PER_REV));
-    Serial.printf("[gauges]   alt 100s=%4ld steps  1000s=%4ld steps  10k=%4ld steps%s\n",
-                  lroundf((altFt % 1000) / 1000.0f * STEPS_PER_REV),
-                  lroundf((altFt % 10000) / 10000.0f * STEPS_PER_REV),
-                  lroundf(altFt / 100000.0f * STEPS_PER_REV),
-                  ALT3_ENABLED ? "" : " (needle 3 disabled)");
+    Serial.printf("[gauges]   speed  %3d kt   -> %4ld steps (%5.1f deg on 270 sweep)  [S3]\n",
+                  gsKt, t[0], spdFrac * 360.0f);
+    Serial.printf("[gauges]   heading %3d deg -> %4ld steps  [ctrl]\n", trackDeg, t[1]);
+    Serial.printf("[gauges]   alt 100s=%4ld  1000s=%4ld  10k=%4ld steps  [ctrl]%s\n",
+                  t[2], t[3], t[4], ALT3_ENABLED ? "" : " (needle 3 disabled)");
 #endif
   }
 
   void zero() { set(0, 0, 0); }
 
   void run() {
-    unsigned long nowUs = micros();
-    speed_.run(nowUs);
-    heading_.run(nowUs);
-    alt100_.run(nowUs);
-    alt1k_.run(nowUs);
-    alt10k_.run(nowUs);
+    speed_.run(micros());
+    // The controller reboots independently (its own power rail, its own reset
+    // button). When it comes back it re-homes and announces itself; re-send the
+    // current needle targets or its four gauges would sit at zero until the
+    // next flight update arrives from the backend.
+    if (link_.poll() && haveLast_) {
+      Serial.println("[gauges] controller rebooted -> re-sending needle targets");
+      link_.sendTargets(last_);
+    }
   }
 
+  // Bench calibration: drive needles to raw step positions, bypassing the
+  // dial-face maths. -1 leaves a needle where it is. Used by the serial
+  // console to measure each needle's post-switch offset — see
+  // ../gauge_link_protocol.md, "Calibrating a needle".
+  void setSteps(const long* t) {
+    if (t[0] >= 0) speed_.moveToSteps(t[0]);
+    link_.sendTargets(t);
+    memcpy(last_, t, sizeof(last_));
+    haveLast_ = true;
+  }
+
+  // Ask the controller to re-home its four needles (the speed needle homes
+  // from setup() only — re-homing it mid-flight would block the display loop).
+  void rehomeController() { link_.sendRehome(); }
+
  private:
-  GaugeStepper speed_, heading_, alt100_, alt1k_, alt10k_;
+  void apply(const long* t) {
+    speed_.moveToSteps(t[0]);
+    link_.sendTargets(t);
+  }
+
+  GaugeStepper speed_;
+  GaugeLink link_;
+  long last_[GAUGE_MOTOR_COUNT] = {0};
+  bool haveLast_ = false;
 };
